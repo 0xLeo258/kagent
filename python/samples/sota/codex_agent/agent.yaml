@@ -1,0 +1,20 @@
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: codex-agent
+spec:
+  description: "OpenAI Codex coding agent"
+  type: BYO
+  byo:
+    deployment:
+      image: cr.kagent.dev/kagent-dev/kagent/codex-runtime:latest
+      env:
+        - name: CLI_MODEL
+          value: "gpt-5"
+      resources:
+        requests:
+          cpu: 500m
+          memory: 512Mi
+        limits:
+          cpu: "2"
+          memory: 2Gi
