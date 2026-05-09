@@ -1,0 +1,59 @@
+operation: translateAgent
+targetObject: inline-skills-agent
+namespace: test
+objects:
+  - apiVersion: v1
+    kind: Secret
+    metadata:
+      name: openai-secret
+      namespace: test
+    data:
+      api-key: c2stdGVzdC1hcGkta2V5  # base64 encoded "sk-test-api-key"
+  - apiVersion: kagent.dev/v1alpha2
+    kind: ModelConfig
+    metadata:
+      name: basic-model
+      namespace: test
+    spec:
+      provider: OpenAI
+      model: gpt-4o
+      apiKeySecret: openai-secret
+      apiKeySecretKey: api-key
+      openAI:
+        temperature: "0.7"
+        maxTokens: 1024
+        topP: "0.95"
+        reasoningEffort: "low"
+      defaultHeaders:
+        User-Agent: "kagent/1.0"
+  - apiVersion: kagent.dev/v1alpha2
+    kind: Agent
+    metadata:
+      name: inline-skills-agent
+      namespace: test
+    spec:
+      type: Declarative
+      declarative:
+        description: An agent with inline skills
+        systemMessage: You are a helpful assistant.
+        modelConfig: basic-model
+        deployment:
+          resources:
+            requests:
+              cpu: 200m
+              memory: 684Mi
+            limits:
+              cpu: 3000m
+              memory: 2Gi
+        tools: []
+        inlineSkills:
+          - name: data-analysis
+            description: Analyze data files and produce reports
+            content: |
+              # Data Analysis Skill
+              Use pandas to analyze CSV files and produce summary reports.
+          - name: code-review
+            description: Review code for best practices
+            content: |
+              # Code Review Skill
+              Review the code for security issues and best practices.

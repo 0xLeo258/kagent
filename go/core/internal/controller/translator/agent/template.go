@@ -91,6 +91,13 @@ func buildTemplateContext(agent v1alpha2.AgentObject, cfg *adk.AgentConfig) Prom
 		}
 	}
 
+	// Collect inline skill names.
+	if spec.Declarative != nil {
+		for _, skill := range spec.Declarative.InlineSkills {
+			tplCtx.SkillNames = append(tplCtx.SkillNames, skill.Name)
+		}
+	}
+
 	return tplCtx
 }
 

@@ -93,3 +93,13 @@ mkdir -p "$_dest"
 tar xf '/tmp/oci-skill.tar' -C "$_dest"
 rm -f '/tmp/oci-skill.tar'
 {{- end }}
+{{- if .HasInlineSkills }}
+# Copy inline skills from ConfigMap mount into /skills/<name>/SKILL.md
+for _skill_file in /inline-skills/*.md; do
+  [ -f "$_skill_file" ] || continue
+  _skill_name="$(basename "$_skill_file" .md)"
+  mkdir -p "/skills/${_skill_name}"
+  cp "$_skill_file" "/skills/${_skill_name}/SKILL.md"
+  echo "Installed inline skill: ${_skill_name}"
+done
+{{- end }}

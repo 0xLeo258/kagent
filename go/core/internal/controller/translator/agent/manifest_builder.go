@@ -80,6 +80,12 @@ func (a *adkApiTranslator) BuildManifest(
 	}
 	outputs.Manifest = append(outputs.Manifest, workloadObjects...)
 
+	if cm, err := buildInlineSkillsConfigMap(manifestCtx); err != nil {
+		return nil, err
+	} else if cm != nil {
+		outputs.Manifest = append(outputs.Manifest, cm)
+	}
+
 	if err := a.setManifestOwnerReferences(agent, outputs.Manifest); err != nil {
 		return nil, err
 	}
@@ -342,13 +348,11 @@ func buildSkillsRuntime(
 	needCodeExecIsolation *bool,
 ) ([]corev1.Container, error) {
 	spec := manifestCtx.agent.GetAgentSpec()
-	if spec.Skills == nil {
-		return nil, nil
-	}
 
-	skills := spec.Skills.Refs
-	gitRefs := spec.Skills.GitRefs
-	if len(skills) == 0 && len(gitRefs) == 0 {
+	hasContainerSkills := spec.Skills != nil && (len(spec.Skills.Refs) > 0 || len(spec.Skills.GitRefs) > 0)
+	hasInlineSkills := spec.Declarative != nil && len(spec.Declarative.InlineSkills) > 0
+
+	if !hasContainerSkills && !hasInlineSkills {
 		return nil, nil
 	}
 
@@ -366,23 +370,53 @@ func buildSkillsRuntime(
 	*volumeMounts = append(*volumeMounts, corev1.VolumeMount{
 		Name:      "kagent-skills",
 		MountPath: "/skills",
-		ReadOnly:  true,
+		ReadOnly:  !hasInlineSkills,
 	})
 
+	// Mount inline skills ConfigMap if present
+	if hasInlineSkills {
+		cmName := manifestCtx.agent.GetName() + "-inline-skills"
+		*volumes = append(*volumes, corev1.Volume{
+			Name: "inline-skills",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: cmName},
+				},
+			},
+		})
+		*volumeMounts = append(*volumeMounts, corev1.VolumeMount{
+			Name:      "inline-skills",
+			MountPath: "/inline-skills",
+			ReadOnly:  true,
+		})
+	}
+
+	var gitRefs []v1alpha2.GitRepo
+	var ociRefs []string
+	var insecureOCI bool
+	var authSecretRef *corev1.LocalObjectReference
 	var initResources *corev1.ResourceRequirements
 	var initEnv []corev1.EnvVar
-	if spec.Skills.InitContainer != nil {
-		if spec.Skills.InitContainer.Resources != nil {
-			initResources = spec.Skills.InitContainer.Resources.DeepCopy()
+
+	if hasContainerSkills {
+		ociRefs = spec.Skills.Refs
+		gitRefs = spec.Skills.GitRefs
+		insecureOCI = spec.Skills.InsecureSkipVerify
+		authSecretRef = spec.Skills.GitAuthSecretRef
+		if spec.Skills.InitContainer != nil {
+			if spec.Skills.InitContainer.Resources != nil {
+				initResources = spec.Skills.InitContainer.Resources.DeepCopy()
+			}
+			initEnv = append(initEnv, spec.Skills.InitContainer.Env...)
 		}
-		initEnv = append(initEnv, spec.Skills.InitContainer.Env...)
 	}
 
 	container, skillsVolumes, err := buildSkillsInitContainer(
 		gitRefs,
-		spec.Skills.GitAuthSecretRef,
-		skills,
-		spec.Skills.InsecureSkipVerify,
+		authSecretRef,
+		ociRefs,
+		insecureOCI,
+		hasInlineSkills,
 		manifestCtx.deployment.SecurityContext,
 		initEnv,
 		getDefaultResources(initResources),
@@ -394,6 +428,37 @@ func buildSkillsRuntime(
 
 	*volumes = append(*volumes, skillsVolumes...)
 	return container, nil
+}
+
+// buildInlineSkillsConfigMap creates a ConfigMap containing SKILL.md files for each inline skill.
+// Returns nil if no inline skills are defined.
+func buildInlineSkillsConfigMap(manifestCtx manifestContext) (*corev1.ConfigMap, error) {
+	spec := manifestCtx.agent.GetAgentSpec()
+	if spec.Declarative == nil || len(spec.Declarative.InlineSkills) == 0 {
+		return nil, nil
+	}
+
+	data := make(map[string]string, len(spec.Declarative.InlineSkills))
+	for _, skill := range spec.Declarative.InlineSkills {
+		key := skill.Name + ".md"
+		if _, exists := data[key]; exists {
+			return nil, fmt.Errorf("duplicate inline skill name %q", skill.Name)
+		}
+		// Key format: <skill-name>.md — the skills-init script or runtime will
+		// place these under /skills/<name>/SKILL.md
+		content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\n\n%s", skill.Name, skill.Description, skill.Content)
+		data[key] = content
+	}
+
+	return &corev1.ConfigMap{
+		TypeMeta: metav1.TypeMeta{APIVersion: "v1", Kind: "ConfigMap"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      manifestCtx.agent.GetName() + "-inline-skills",
+			Namespace: manifestCtx.agent.GetNamespace(),
+			Labels:    manifestCtx.podLabels(),
+		},
+		Data: data,
+	}, nil
 }
 
 func projectedTokenVolume() corev1.Volume {

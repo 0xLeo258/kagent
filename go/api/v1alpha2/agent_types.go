@@ -221,6 +221,38 @@ type DeclarativeAgentSpec struct {
 	// This includes event compaction (compression) and context caching.
 	// +optional
 	Context *ContextConfig `json:"context,omitempty"`
+
+	// InlineSkills defines prompt-based skills whose content is specified directly
+	// in the Agent spec. Each inline skill is mounted as a SKILL.md file under /skills/<name>/
+	// and discovered by the runtime alongside container-based skills.
+	// +optional
+	// +kubebuilder:validation:MaxItems=20
+	InlineSkills []InlineSkill `json:"inlineSkills,omitempty"`
+}
+
+// InlineSkill defines a prompt-based skill document that is mounted as a SKILL.md
+// file under /skills/<name>/. Skills can reference CLI tools from containers
+// via absolute paths (e.g. /skills/<container-name>/scripts/...).
+type InlineSkill struct {
+	// Name is the unique identifier for this skill. Must be a valid DNS label
+	// (lowercase alphanumeric, dashes, dots). This becomes the directory name under /skills/.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9\.\-]*[a-z0-9])?$`
+	Name string `json:"name"`
+
+	// Description is a short human-readable summary of what the skill does.
+	// This is embedded in the YAML frontmatter of the generated SKILL.md file.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Description string `json:"description"`
+
+	// Content is the full body of the SKILL.md file (everything after the frontmatter).
+	// Supports Markdown formatting.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	Content string `json:"content"`
 }
 
 // SandboxConfig configures sandboxed execution behavior.

@@ -1,0 +1,385 @@
+{
+  "agentCard": {
+    "capabilities": {
+      "pushNotifications": false,
+      "stateTransitionHistory": true,
+      "streaming": true
+    },
+    "defaultInputModes": [
+      "text"
+    ],
+    "defaultOutputModes": [
+      "text"
+    ],
+    "description": "",
+    "name": "mixed_skills_agent",
+    "preferredTransport": "JSONRPC",
+    "skills": null,
+    "url": "http://mixed-skills-agent.test:8080",
+    "version": ""
+  },
+  "config": {
+    "description": "",
+    "instruction": "You are a helpful assistant.",
+    "model": {
+      "base_url": "",
+      "headers": {
+        "User-Agent": "kagent/1.0"
+      },
+      "max_tokens": 1024,
+      "model": "gpt-4o",
+      "reasoning_effort": "low",
+      "temperature": 0.7,
+      "top_p": 0.95,
+      "type": "openai"
+    },
+    "stream": false
+  },
+  "manifest": [
+    {
+      "apiVersion": "v1",
+      "kind": "Secret",
+      "metadata": {
+        "labels": {
+          "app": "kagent",
+          "app.kubernetes.io/managed-by": "kagent",
+          "app.kubernetes.io/name": "mixed-skills-agent",
+          "app.kubernetes.io/part-of": "kagent",
+          "kagent": "mixed-skills-agent"
+        },
+        "name": "mixed-skills-agent",
+        "namespace": "test",
+        "ownerReferences": [
+          {
+            "apiVersion": "kagent.dev/v1alpha2",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Agent",
+            "name": "mixed-skills-agent",
+            "uid": ""
+          }
+        ]
+      },
+      "stringData": {
+        "agent-card.json": "{\"name\":\"mixed_skills_agent\",\"description\":\"\",\"url\":\"http://mixed-skills-agent.test:8080\",\"version\":\"\",\"capabilities\":{\"streaming\":true,\"pushNotifications\":false,\"stateTransitionHistory\":true},\"defaultInputModes\":[\"text\"],\"defaultOutputModes\":[\"text\"],\"skills\":[],\"preferredTransport\":\"JSONRPC\"}",
+        "config.json": "{\"model\":{\"type\":\"openai\",\"model\":\"gpt-4o\",\"headers\":{\"User-Agent\":\"kagent/1.0\"},\"base_url\":\"\",\"max_tokens\":1024,\"reasoning_effort\":\"low\",\"temperature\":0.7,\"top_p\":0.95},\"description\":\"\",\"instruction\":\"You are a helpful assistant.\",\"stream\":false}",
+        "srt-settings.json": "{\"filesystem\":{\"allowWrite\":[\".\",\"/tmp\"],\"denyRead\":[],\"denyWrite\":[]},\"network\":{\"allowedDomains\":[],\"deniedDomains\":[]}}"
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "ServiceAccount",
+      "metadata": {
+        "labels": {
+          "app": "kagent",
+          "app.kubernetes.io/managed-by": "kagent",
+          "app.kubernetes.io/name": "mixed-skills-agent",
+          "app.kubernetes.io/part-of": "kagent",
+          "kagent": "mixed-skills-agent"
+        },
+        "name": "mixed-skills-agent",
+        "namespace": "test",
+        "ownerReferences": [
+          {
+            "apiVersion": "kagent.dev/v1alpha2",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Agent",
+            "name": "mixed-skills-agent",
+            "uid": ""
+          }
+        ]
+      }
+    },
+    {
+      "apiVersion": "apps/v1",
+      "kind": "Deployment",
+      "metadata": {
+        "labels": {
+          "app": "kagent",
+          "app.kubernetes.io/managed-by": "kagent",
+          "app.kubernetes.io/name": "mixed-skills-agent",
+          "app.kubernetes.io/part-of": "kagent",
+          "kagent": "mixed-skills-agent"
+        },
+        "name": "mixed-skills-agent",
+        "namespace": "test",
+        "ownerReferences": [
+          {
+            "apiVersion": "kagent.dev/v1alpha2",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Agent",
+            "name": "mixed-skills-agent",
+            "uid": ""
+          }
+        ]
+      },
+      "spec": {
+        "selector": {
+          "matchLabels": {
+            "app": "kagent",
+            "kagent": "mixed-skills-agent"
+          }
+        },
+        "strategy": {
+          "rollingUpdate": {
+            "maxSurge": 1,
+            "maxUnavailable": 0
+          },
+          "type": "RollingUpdate"
+        },
+        "template": {
+          "metadata": {
+            "annotations": {
+              "kagent.dev/config-hash": "8841589844443251949"
+            },
+            "labels": {
+              "app": "kagent",
+              "app.kubernetes.io/managed-by": "kagent",
+              "app.kubernetes.io/name": "mixed-skills-agent",
+              "app.kubernetes.io/part-of": "kagent",
+              "kagent": "mixed-skills-agent"
+            }
+          },
+          "spec": {
+            "containers": [
+              {
+                "args": [
+                  "--host",
+                  "0.0.0.0",
+                  "--port",
+                  "8080",
+                  "--filepath",
+                  "/config"
+                ],
+                "env": [
+                  {
+                    "name": "OPENAI_API_KEY",
+                    "valueFrom": {
+                      "secretKeyRef": {
+                        "key": "api-key",
+                        "name": "openai-secret"
+                      }
+                    }
+                  },
+                  {
+                    "name": "KAGENT_NAMESPACE",
+                    "valueFrom": {
+                      "fieldRef": {
+                        "fieldPath": "metadata.namespace"
+                      }
+                    }
+                  },
+                  {
+                    "name": "KAGENT_NAME",
+                    "value": "mixed-skills-agent"
+                  },
+                  {
+                    "name": "KAGENT_URL",
+                    "value": "http://kagent-controller.kagent:8083"
+                  },
+                  {
+                    "name": "KAGENT_SKILLS_FOLDER",
+                    "value": "/skills"
+                  },
+                  {
+                    "name": "KAGENT_SRT_SETTINGS_PATH",
+                    "value": "/config/srt-settings.json"
+                  }
+                ],
+                "image": "cr.kagent.dev/kagent-dev/kagent/app:dev",
+                "imagePullPolicy": "IfNotPresent",
+                "name": "kagent",
+                "ports": [
+                  {
+                    "containerPort": 8080,
+                    "name": "http"
+                  }
+                ],
+                "readinessProbe": {
+                  "httpGet": {
+                    "path": "/.well-known/agent-card.json",
+                    "port": "http"
+                  },
+                  "initialDelaySeconds": 15,
+                  "periodSeconds": 15,
+                  "timeoutSeconds": 15
+                },
+                "resources": {
+                  "limits": {
+                    "cpu": "3",
+                    "memory": "2Gi"
+                  },
+                  "requests": {
+                    "cpu": "200m",
+                    "memory": "684Mi"
+                  }
+                },
+                "securityContext": {
+                  "privileged": true
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/config",
+                    "name": "config"
+                  },
+                  {
+                    "mountPath": "/skills",
+                    "name": "kagent-skills"
+                  },
+                  {
+                    "mountPath": "/inline-skills",
+                    "name": "inline-skills",
+                    "readOnly": true
+                  },
+                  {
+                    "mountPath": "/var/run/secrets/tokens",
+                    "name": "kagent-token"
+                  }
+                ]
+              }
+            ],
+            "initContainers": [
+              {
+                "command": [
+                  "/bin/sh",
+                  "-c",
+                  "set -e\n_image=\"$(cat \u003c\u003c'ENDVAL'\nfoo:latest\nENDVAL\n)\"\n_dest=\"$(cat \u003c\u003c'ENDVAL'\n/skills/foo\nENDVAL\n)\"\necho \"Exporting OCI image ${_image} into ${_dest}\"\n_uname=\"$(uname -m)\"\ncase \"$_uname\" in\n  x86_64|amd64)\n    _arch=\"amd64\"\n    ;;\n  aarch64|arm64)\n    _arch=\"arm64\"\n    ;;\n  *)\n    echo \"Unsupported architecture for OCI export: ${_uname}\" \u003e\u00262\n    exit 1\n    ;;\nesac\nkrane export --platform \"linux/${_arch}\" \"$_image\" '/tmp/oci-skill.tar'\nmkdir -p \"$_dest\"\ntar xf '/tmp/oci-skill.tar' -C \"$_dest\"\nrm -f '/tmp/oci-skill.tar'\n# Copy inline skills from ConfigMap mount into /skills/\u003cname\u003e/SKILL.md\nfor _skill_file in /inline-skills/*.md; do\n  [ -f \"$_skill_file\" ] || continue\n  _skill_name=\"$(basename \"$_skill_file\" .md)\"\n  mkdir -p \"/skills/${_skill_name}\"\n  cp \"$_skill_file\" \"/skills/${_skill_name}/SKILL.md\"\n  echo \"Installed inline skill: ${_skill_name}\"\ndone\n"
+                ],
+                "image": "cr.kagent.dev/kagent-dev/kagent/skills-init:dev",
+                "name": "skills-init",
+                "resources": {
+                  "limits": {
+                    "cpu": "2",
+                    "memory": "1Gi"
+                  },
+                  "requests": {
+                    "cpu": "100m",
+                    "memory": "384Mi"
+                  }
+                },
+                "volumeMounts": [
+                  {
+                    "mountPath": "/skills",
+                    "name": "kagent-skills"
+                  },
+                  {
+                    "mountPath": "/inline-skills",
+                    "name": "inline-skills",
+                    "readOnly": true
+                  }
+                ]
+              }
+            ],
+            "serviceAccountName": "mixed-skills-agent",
+            "volumes": [
+              {
+                "name": "config",
+                "secret": {
+                  "secretName": "mixed-skills-agent"
+                }
+              },
+              {
+                "emptyDir": {},
+                "name": "kagent-skills"
+              },
+              {
+                "configMap": {
+                  "name": "mixed-skills-agent-inline-skills"
+                },
+                "name": "inline-skills"
+              },
+              {
+                "name": "kagent-token",
+                "projected": {
+                  "sources": [
+                    {
+                      "serviceAccountToken": {
+                        "audience": "kagent",
+                        "expirationSeconds": 3600,
+                        "path": "kagent-token"
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "status": {}
+    },
+    {
+      "apiVersion": "v1",
+      "kind": "Service",
+      "metadata": {
+        "labels": {
+          "app": "kagent",
+          "app.kubernetes.io/managed-by": "kagent",
+          "app.kubernetes.io/name": "mixed-skills-agent",
+          "app.kubernetes.io/part-of": "kagent",
+          "kagent": "mixed-skills-agent"
+        },
+        "name": "mixed-skills-agent",
+        "namespace": "test",
+        "ownerReferences": [
+          {
+            "apiVersion": "kagent.dev/v1alpha2",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Agent",
+            "name": "mixed-skills-agent",
+            "uid": ""
+          }
+        ]
+      },
+      "spec": {
+        "ports": [
+          {
+            "name": "http",
+            "port": 8080,
+            "targetPort": 8080
+          }
+        ],
+        "selector": {
+          "app": "kagent",
+          "kagent": "mixed-skills-agent"
+        },
+        "type": "ClusterIP"
+      },
+      "status": {
+        "loadBalancer": {}
+      }
+    },
+    {
+      "apiVersion": "v1",
+      "data": {
+        "data-analysis.md": "---\nname: data-analysis\ndescription: Analyze data files and produce reports\n---\n\n# Data Analysis Skill\nUse pandas to analyze CSV files and produce summary reports.\n",
+        "python-tools.md": "---\nname: python-tools\ndescription: Python data science tools with prompt guide\n---\n\n# Python Tools\nUse these CLI tools for data processing tasks.\n"
+      },
+      "kind": "ConfigMap",
+      "metadata": {
+        "labels": {
+          "app": "kagent",
+          "app.kubernetes.io/managed-by": "kagent",
+          "app.kubernetes.io/name": "mixed-skills-agent",
+          "app.kubernetes.io/part-of": "kagent",
+          "kagent": "mixed-skills-agent"
+        },
+        "name": "mixed-skills-agent-inline-skills",
+        "namespace": "test",
+        "ownerReferences": [
+          {
+            "apiVersion": "kagent.dev/v1alpha2",
+            "blockOwnerDeletion": true,
+            "controller": true,
+            "kind": "Agent",
+            "name": "mixed-skills-agent",
+            "uid": ""
+          }
+        ]
+      }
+    }
+  ]
+}

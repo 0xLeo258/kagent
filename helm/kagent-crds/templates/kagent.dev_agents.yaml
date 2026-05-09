@@ -12988,6 +12988,44 @@ spec:
                       Code will be executed in a sandboxed environment.
                       due to a bug in adk (https://github.com/google/adk-python/issues/3921), this field is ignored for now.
                     type: boolean
+                  inlineSkills:
+                    description: |-
+                      InlineSkills defines prompt-based skills whose content is specified directly
+                      in the Agent spec. Each inline skill is mounted as a SKILL.md file under /skills/<name>/
+                      and discovered by the runtime alongside container-based skills.
+                    items:
+                      description: |-
+                        InlineSkill defines a prompt-based skill document that is mounted as a SKILL.md
+                        file under /skills/<name>/. Skills can reference CLI tools from containers
+                        via absolute paths (e.g. /skills/<container-name>/scripts/...).
+                      properties:
+                        content:
+                          description: |-
+                            Content is the full body of the SKILL.md file (everything after the frontmatter).
+                            Supports Markdown formatting.
+                          minLength: 1
+                          type: string
+                        description:
+                          description: |-
+                            Description is a short human-readable summary of what the skill does.
+                            This is embedded in the YAML frontmatter of the generated SKILL.md file.
+                          minLength: 1
+                          type: string
+                        name:
+                          description: |-
+                            Name is the unique identifier for this skill. Must be a valid DNS label
+                            (lowercase alphanumeric, dashes, dots). This becomes the directory name under /skills/.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([a-z0-9\.\-]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - content
+                      - description
+                      - name
+                      type: object
+                    maxItems: 20
+                    type: array
                   memory:
                     description: Memory configuration for the agent.
                     properties:

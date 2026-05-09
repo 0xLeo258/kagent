@@ -1186,6 +1186,7 @@ type skillsInitData struct {
 	InsecureOCI      bool          // --insecure flag for krane
 	SSHHosts         []sshHostData // extra hosts to add to known_hosts via ssh-keyscan
 	ImagePullSecrets []string      // secret names whose .dockerconfigjson are merged by the script
+	HasInlineSkills  bool          // whether inline skills ConfigMap is mounted
 }
 
 // sshHostData holds the host and optional port for an SSH known_hosts entry.
@@ -1249,10 +1250,12 @@ func prepareSkillsInitData(
 	ociRefs []string,
 	insecureOCI bool,
 	imagePullSecrets []string,
+	hasInlineSkills bool,
 ) (skillsInitData, error) {
 	data := skillsInitData{
 		InsecureOCI:      insecureOCI,
 		ImagePullSecrets: imagePullSecrets,
+		HasInlineSkills:  hasInlineSkills,
 	}
 
 	if authSecretRef != nil {
@@ -1335,6 +1338,7 @@ func buildSkillsInitContainer(
 	authSecretRef *corev1.LocalObjectReference,
 	ociRefs []string,
 	insecureOCI bool,
+	hasInlineSkills bool,
 	securityContext *corev1.SecurityContext,
 	env []corev1.EnvVar,
 	resources corev1.ResourceRequirements,
@@ -1346,7 +1350,7 @@ func buildSkillsInitContainer(
 		pullSecretNames[i] = s.Name
 	}
 
-	data, err := prepareSkillsInitData(gitRefs, authSecretRef, ociRefs, insecureOCI, pullSecretNames)
+	data, err := prepareSkillsInitData(gitRefs, authSecretRef, ociRefs, insecureOCI, pullSecretNames, hasInlineSkills)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1361,6 +1365,15 @@ func buildSkillsInitContainer(
 
 	volumeMounts := []corev1.VolumeMount{
 		{Name: "kagent-skills", MountPath: "/skills"},
+	}
+
+	// Mount inline skills ConfigMap so the init script can copy them into /skills/
+	if hasInlineSkills {
+		volumeMounts = append(volumeMounts, corev1.VolumeMount{
+			Name:      "inline-skills",
+			MountPath: "/inline-skills",
+			ReadOnly:  true,
+		})
 	}
 
 	// Mount single auth secret if provided.
