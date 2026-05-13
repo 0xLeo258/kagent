@@ -1,0 +1,23 @@
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: generic-cli-agent
+  namespace: default
+spec:
+  description: "Generic CLI agent via CLI-A2A-Adapter (stdin/stdout)"
+  type: byo
+  byo:
+    deployment:
+      image: ghcr.io/0xleo258/cli-a2a-adapter:latest
+      env:
+        - name: ADAPTER_BACKEND
+          value: "generic"
+        - name: GENERIC_CMD
+          value: "/usr/local/bin/my-agent"
+      resources:
+        requests:
+          memory: "256Mi"
+          cpu: "250m"
+        limits:
+          memory: "1Gi"
+          cpu: "2000m"

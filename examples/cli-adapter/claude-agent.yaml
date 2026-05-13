@@ -1,0 +1,27 @@
+apiVersion: kagent.dev/v1alpha2
+kind: Agent
+metadata:
+  name: claude-code
+  namespace: default
+spec:
+  description: "Claude Code agent via CLI-A2A-Adapter"
+  type: byo
+  modelConfig: claude-model
+  byo:
+    deployment:
+      image: ghcr.io/0xleo258/cli-a2a-adapter:latest
+      env:
+        - name: ADAPTER_BACKEND
+          value: "claude"
+        - name: ANTHROPIC_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: claude-secrets
+              key: api-key
+      resources:
+        requests:
+          memory: "512Mi"
+          cpu: "500m"
+        limits:
+          memory: "2Gi"
+          cpu: "4000m"
