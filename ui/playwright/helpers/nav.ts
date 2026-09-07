@@ -18,6 +18,7 @@ import { expect, type Page } from "@playwright/test";
 export type NavKey =
   | "dashboard"
   | "agents"
+  | "schedules"
   | "models"
   | "mcpServers"
   | "prompts"
@@ -26,6 +27,7 @@ export type NavKey =
 export const navLabels: Record<NavKey, string> = {
   dashboard: "Dashboard",
   agents: "Agents",
+  schedules: "Schedules",
   models: "Models",
   mcpServers: "MCP Servers",
   prompts: "Prompts",

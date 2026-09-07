@@ -164,7 +164,7 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 		return ListResult{}, serviceerrors.NewInvalidArgument("page token is invalid", err)
 	}
 	instances, err := s.store.ListAgentInstances(ctx, database.AgentInstanceQuery{
-		UserID: userID, AllUsers: request.AllCreators,
+		UserID: userID, AllUsers: request.AllCreators, ExcludeUserID: auth.ScheduledRunUserID,
 		MatchLabels:   request.MatchLabels,
 		AgentTemplate: request.AgentTemplate, Harness: request.Harness,
 		AfterID: afterID, Limit: pageSize + 1,

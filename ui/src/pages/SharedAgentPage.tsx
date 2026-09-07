@@ -61,7 +61,7 @@ export function SharedAgentPage() {
 
   const conversation = id ? { id } : undefined;
 
-  const chat = useChat(conversation);
+  const chat = useChat(conversation, undefined, { readOnly: !mayReply });
 
   /*
    * The owner is writing to this conversation too, so it has to keep up.
@@ -122,7 +122,7 @@ export function SharedAgentPage() {
             height: `calc(100vh - ${theme.layout.headerHeight}px - ${theme.space(48)})`,
           }}
         >
-          <ChatTranscript chat={chat} sessionId={id} />
+          <ChatTranscript chat={chat} sessionId={id} readOnly={!mayReply} />
           {mayReply ? (
             <div css={{ marginTop: theme.space(4), display: "grid", gap: theme.space(1) }}>
               <ChatComposer

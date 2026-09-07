@@ -427,17 +427,19 @@ const listAgentInstances = `-- name: ListAgentInstances :many
 SELECT i.id, i.user_id, i.request_id, i.prepared_revision, i.state, i.labels, i.data, i.operation, i.context_id, i.source_checkpoint_id, i.history_id FROM agent_instance i
 LEFT JOIN runtime_revision r ON r.revision = i.prepared_revision
 WHERE ($1::boolean OR i.user_id = $2)
-  AND (NULLIF($3::text, '') IS NULL OR i.id > NULLIF($3::text, '')::uuid)
-  AND i.labels @> $4::jsonb
-  AND ($5::text = '' OR (r.agent_template_name = $5 AND r.namespace = $6))
-  AND ($7::text = '' OR (r.harness_name = $7 AND r.namespace = $8))
+  AND ($3::text = '' OR i.user_id <> $3)
+  AND (NULLIF($4::text, '') IS NULL OR i.id > NULLIF($4::text, '')::uuid)
+  AND i.labels @> $5::jsonb
+  AND ($6::text = '' OR (r.agent_template_name = $6 AND r.namespace = $7))
+  AND ($8::text = '' OR (r.harness_name = $8 AND r.namespace = $9))
 ORDER BY i.id
-LIMIT $9
+LIMIT $10
 `
 
 type ListAgentInstancesParams struct {
 	AllUsers               bool
 	UserID                 string
+	ExcludeUserID          string
 	AfterID                string
 	MatchLabels            []byte
 	AgentTemplate          string
@@ -459,6 +461,7 @@ func (q *Queries) ListAgentInstances(ctx context.Context, arg ListAgentInstances
 	rows, err := q.db.Query(ctx, listAgentInstances,
 		arg.AllUsers,
 		arg.UserID,
+		arg.ExcludeUserID,
 		arg.AfterID,
 		arg.MatchLabels,
 		arg.AgentTemplate,

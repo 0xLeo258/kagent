@@ -203,7 +203,7 @@ func TestServiceListPaginatesByInstanceID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Instances) != 2 || store.listQuery.UserID != "alice" || store.listQuery.AllUsers || store.listQuery.Limit != 3 {
+	if len(result.Instances) != 2 || store.listQuery.UserID != "alice" || store.listQuery.AllUsers || store.listQuery.Limit != 3 || store.listQuery.ExcludeUserID != auth.ScheduledRunUserID {
 		t.Fatalf("List() = %+v, query = %+v", result, store.listQuery)
 	}
 	afterID, err := decodePageToken(result.NextPageToken)
@@ -213,7 +213,7 @@ func TestServiceListPaginatesByInstanceID(t *testing.T) {
 	if _, err := service.List(serviceTestContext("alice"), ListRequest{AllCreators: true}); err != nil {
 		t.Fatal(err)
 	}
-	if store.listQuery.UserID != "alice" || !store.listQuery.AllUsers {
+	if store.listQuery.UserID != "alice" || !store.listQuery.AllUsers || store.listQuery.ExcludeUserID != auth.ScheduledRunUserID {
 		t.Fatalf("operator list query = %+v", store.listQuery)
 	}
 }

@@ -14,6 +14,7 @@
 
 import { currentChatScenario } from "@/mocks/scenario";
 import { allAgentInstances, instanceShareForToken } from "@/mocks/state";
+import { findScheduledRun, SCHEDULED_INSTANCE_ID } from "@/mocks/scheduledRuns";
 import { ApiError } from "../ApiError";
 import { agentInstanceShareToken } from "../shareToken";
 import { HITL_EXTENSION_URI, type PendingRequest } from "./hitl";
@@ -166,6 +167,15 @@ export class MockChatClient implements ChatClient {
       (row) =>
         row.id === conversation.id,
     );
+    if (instance?.scheduledRun && !findScheduledRun("kagent/daily-report")?.resource.spec.allowSessionInteraction) {
+      yield {
+        type: "error",
+        error: new ApiError("This scheduled conversation is read-only.", {
+          kind: "http", status: 403, url: "A2AService/SendStreamingMessage",
+        }),
+      };
+      return;
+    }
     if (instance && instance.state !== "ready") {
       yield {
         type: "error",
@@ -506,6 +516,10 @@ function saveTranscript(sessionId: string, messages: ChatMessage[]): void {
  * Built fresh per call so one test's turns cannot leak into the next.
  */
 const SEEDED_TRANSCRIPTS: Record<string, () => ChatMessage[]> = {
+  [SCHEDULED_INSTANCE_ID]: () => [
+    message("schedule-user", "user", "Summarize cluster health.", "scheduled-task"),
+    message("schedule-reply", "agent", "The mock cluster is healthy. All 3 pods are running and no warning events were reported.", "scheduled-task"),
+  ],
   // Keyed by `instance-id`, which is what a conversation is addressed
   // by now — the same key `conversationKey` builds. This is the first instance in
   // `mockAgentInstances`, so the fixture agent a reader opens first has a

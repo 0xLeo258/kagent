@@ -13,6 +13,7 @@
  */
 
 import { type ResourceRefInput, invoke } from "./operations";
+import type { ScheduledRun, ScheduledRunExecution, ScheduledRunExecutionPage, ScheduledRunWrite } from "./domain/scheduledRuns";
 import { sortedByFields, sortedByRef } from "./order";
 import type {
   CreateModelConfigRequest,
@@ -252,6 +253,15 @@ export interface AgentInstancesApi {
 }
 
 export interface KagentApiClient {
+  scheduledRuns: {
+    list(namespace: string, options?: ReadOptions): Promise<ScheduledRun[]>;
+    get(namespace: string, name: string, options?: ReadOptions): Promise<ScheduledRun>;
+    create(input: ScheduledRunWrite): Promise<ScheduledRun>;
+    update(input: ScheduledRunWrite): Promise<ScheduledRun>;
+    remove(namespace: string, name: string): Promise<void>;
+    trigger(namespace: string, name: string): Promise<ScheduledRunExecution>;
+    executions(namespace: string, name: string, pageToken?: string, options?: ReadOptions): Promise<ScheduledRunExecutionPage>;
+  };
   models: ModelsApi;
   mcpServers: McpServersApi;
   prompts: PromptsApi;
@@ -263,6 +273,15 @@ export interface KagentApiClient {
 
 export function createApiClient(): KagentApiClient {
   return {
+    scheduledRuns: {
+      list: (namespace, options) => invoke("scheduledRuns.list", { namespace }, options).then(sortedByFields),
+      get: (namespace, name, options) => invoke("scheduledRuns.get", { namespace, name }, options),
+      create: (input) => invoke("scheduledRuns.create", input),
+      update: (input) => invoke("scheduledRuns.update", input),
+      remove: (namespace, name) => invoke("scheduledRuns.delete", { namespace, name }),
+      trigger: (namespace, name) => invoke("scheduledRuns.trigger", { namespace, name }),
+      executions: (namespace, name, pageToken, options) => invoke("scheduledRuns.executions", { namespace, name, pageToken }, options),
+    },
     models: {
       list: (options) => invoke("models.list", {}, options).then(sortedByRef),
       get: (namespace, name, options) =>

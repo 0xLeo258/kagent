@@ -31,6 +31,7 @@
  */
 
 import { getOperationOverride } from "./extensionPoints";
+import type { ScheduledRun, ScheduledRunExecution, ScheduledRunExecutionPage, ScheduledRunWrite } from "./domain/scheduledRuns";
 import { defaultOperations } from "./grpc/operations";
 import type {
   CreateModelConfigRequest,
@@ -130,6 +131,13 @@ export interface SubstratePageInput<Sort = string> {
  * positional signature cannot be inspected by any of them.
  */
 export interface OperationMap {
+  "scheduledRuns.list": { input: { namespace: string }; output: ScheduledRun[] };
+  "scheduledRuns.get": { input: ResourceRefInput; output: ScheduledRun };
+  "scheduledRuns.create": { input: ScheduledRunWrite; output: ScheduledRun };
+  "scheduledRuns.update": { input: ScheduledRunWrite; output: ScheduledRun };
+  "scheduledRuns.delete": { input: ResourceRefInput; output: void };
+  "scheduledRuns.trigger": { input: ResourceRefInput; output: ScheduledRunExecution };
+  "scheduledRuns.executions": { input: ResourceRefInput & { pageToken?: string }; output: ScheduledRunExecutionPage };
   "models.list": { input: NoInput; output: ModelConfig[] };
   "models.get": { input: ResourceRefInput; output: ModelConfig };
   "models.create": { input: { payload: CreateModelConfigRequest }; output: ModelConfig };

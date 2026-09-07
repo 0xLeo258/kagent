@@ -102,6 +102,10 @@ func AuthnMiddleware(authn AuthProvider) func(http.Handler) http.Handler {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
 			}
+			if session != nil && session.Principal().User.ID == ScheduledRunUserID {
+				http.Error(w, "Reserved internal identity", http.StatusForbidden)
+				return
+			}
 			if session != nil {
 				r = r.WithContext(AuthSessionTo(r.Context(), session))
 			}

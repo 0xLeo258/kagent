@@ -85,6 +85,10 @@ export interface AgentInstanceFailure {
  * was cut from — see `domain/agentPairs`.
  */
 export interface AgentInstance {
+  /** Access resolved by GetAgentInstance for this reader. */
+  readOnly?: boolean;
+  /** Created by a schedule; its title, sharing and deletion are schedule-owned. */
+  scheduledRun?: boolean;
   /** A UUID. The controller rejects anything else — `validateIdentity` parses it. */
   id: string;
   /** A2A context within this instance authority; retained by forks. */
@@ -136,12 +140,12 @@ export interface AgentInstance {
  * enabled into a refusal.
  */
 export function canSuspend(instance: AgentInstance): boolean {
-  return instance.state === "ready" && instance.operation === "unspecified";
+  return !instance.readOnly && instance.state === "ready" && instance.operation === "unspecified";
 }
 
 /** Whether an instance can be resumed right now — the mirror of `canSuspend`. */
 export function canResume(instance: AgentInstance): boolean {
-  return instance.state === "suspended" && instance.operation === "unspecified";
+  return !instance.readOnly && instance.state === "suspended" && instance.operation === "unspecified";
 }
 
 /**
@@ -155,6 +159,7 @@ export function lifecycleBlockedReason(
   instance: AgentInstance,
   action: "suspend" | "resume",
 ): string | undefined {
+  if (instance.readOnly) return "This conversation is read-only.";
   if (instance.operation !== "unspecified") {
     return `A ${instance.operation} operation is already in progress. The controller refuses a second one until it finishes.`;
   }

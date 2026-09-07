@@ -92,7 +92,9 @@ func (a *ProxyAuthenticator) UpstreamAuth(r *http.Request, session auth.Session,
 		if simpleSession.authHeader != "" {
 			r.Header.Set("Authorization", simpleSession.authHeader)
 		}
-		if userID := simpleSession.P.User.ID; userID != "" {
+	}
+	if session != nil {
+		if userID := session.Principal().User.ID; userID != "" {
 			r.Header.Set("X-User-Id", userID)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
+	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 )
 
 // createTestJWT creates a minimal JWT token with the given claims
@@ -294,5 +295,42 @@ func TestProxyAuthenticator_UpstreamAuth(t *testing.T) {
 	// Verify X-User-Id is forwarded so downstream A2A runtimes receive the real user identity
 	if got := req.Header.Get("X-User-Id"); got != "user123" {
 		t.Errorf("X-User-Id header = %q, want %q", got, "user123")
+	}
+}
+
+type internalProxyTestSession string
+
+func (s internalProxyTestSession) Principal() auth.Principal {
+	return auth.Principal{User: auth.User{ID: string(s)}}
+}
+
+func TestProxyAuthenticator_UpstreamAuthGenericSession(t *testing.T) {
+	tests := []struct {
+		name    string
+		session auth.Session
+		userID  string
+	}{
+		{name: "internal scheduler", session: internalProxyTestSession(auth.ScheduledRunUserID), userID: auth.ScheduledRunUserID},
+		{name: "empty principal", session: internalProxyTestSession("")},
+		{name: "no session"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "http://runtime.test", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Authorization", "Bearer runtime-credential")
+			err = authimpl.NewProxyAuthenticator("").UpstreamAuth(request, tt.session, auth.Principal{})
+			if err != nil {
+				t.Fatalf("UpstreamAuth() error = %v", err)
+			}
+			if got := request.Header.Get("X-User-Id"); got != tt.userID {
+				t.Errorf("X-User-Id = %q, want %q", got, tt.userID)
+			}
+			if got := request.Header.Get("Authorization"); got != "Bearer runtime-credential" {
+				t.Errorf("Authorization = %q, want the existing runtime credential", got)
+			}
+		})
 	}
 }

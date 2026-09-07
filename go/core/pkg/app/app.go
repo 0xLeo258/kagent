@@ -30,12 +30,14 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/grpcserver"
 	authimpl "github.com/kagent-dev/kagent/go/core/internal/httpserver/auth"
 	v2mcp "github.com/kagent-dev/kagent/go/core/internal/mcp"
+	"github.com/kagent-dev/kagent/go/core/internal/scheduledrun"
 	"github.com/kagent-dev/kagent/go/core/internal/service/agentinstance"
 	"github.com/kagent-dev/kagent/go/core/internal/service/checkpoint"
 	"github.com/kagent-dev/kagent/go/core/internal/service/kubecrud"
 	memoryservice "github.com/kagent-dev/kagent/go/core/internal/service/memory"
 	modelservice "github.com/kagent-dev/kagent/go/core/internal/service/model"
 	prompttemplateservice "github.com/kagent-dev/kagent/go/core/internal/service/prompttemplate"
+	scheduledrunservice "github.com/kagent-dev/kagent/go/core/internal/service/scheduledrun"
 	systemservice "github.com/kagent-dev/kagent/go/core/internal/service/system"
 	toolservice "github.com/kagent-dev/kagent/go/core/internal/service/tool"
 	"github.com/kagent-dev/kagent/go/core/internal/substrate"
@@ -57,7 +59,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
 // Options are the components a library consumer may supply in place of core's own.
@@ -213,7 +215,7 @@ func Run(ctx context.Context, opts Options) error {
 		Scheme:                  managerScheme,
 		Cache:                   managerCacheOptions,
 		Client:                  managerClientOptions,
-		Metrics:                 metricsserver.Options{BindAddress: "0"},
+		Metrics:                 metricsOptions(),
 		LeaderElection:          envBool("LEADER_ELECT"),
 		LeaderElectionID:        "0e9f6799.kagent.dev",
 		LeaderElectionNamespace: env("KAGENT_NAMESPACE", "kagent"),
@@ -276,6 +278,23 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	gateway := a2agateway.New(store, authorizer, gatewayDialer, instanceWorkflow,
 		env("KAGENT_GATEWAY_URL", "http://127.0.0.1:8083"))
+	// ScheduledRun access is authorized at its API boundary. The controller owns
+	// the resulting instances, which must not depend on a user's login session.
+	schedulerInstances := agentinstance.NewService(store, &authimpl.NoopAuthorizer{}, instanceWorkflow)
+	scheduler, err := scheduledrun.NewScheduler(scheduledrun.Config{
+		Kube: manager.GetClient(), Store: store, Instances: schedulerInstances,
+		Gateway: gateway, Registerer: metrics.Registry, WatchNamespaces: watchNamespaces,
+	})
+	if err != nil {
+		return fmt.Errorf("create ScheduledRun scheduler: %w", err)
+	}
+	if err := manager.Add(scheduler); err != nil {
+		return fmt.Errorf("add ScheduledRun scheduler: %w", err)
+	}
+	if err := scheduledrun.NewController(scheduler).SetupWithManager(manager); err != nil {
+		return fmt.Errorf("set up ScheduledRun controller: %w", err)
+	}
+	schedules := scheduledrunservice.NewService(manager.GetClient(), authorizer, store, scheduler)
 	mcpHandler, err := v2mcp.New(instances, checkpoints, gateway)
 	if err != nil {
 		return err
@@ -290,18 +309,20 @@ func Run(ctx context.Context, opts Options) error {
 	})
 	mux.Handle("/mcp", auth.AuthnMiddleware(authenticator)(mcpHandler))
 	server, err := grpcserver.New(grpcserver.Config{
-		MethodPolicies:        policies,
-		RegisterServices:      opts.GRPCServices,
-		BindAddress:           env("HTTP_BIND_ADDRESS", ":8083"),
-		Reflection:            envBool("GRPC_REFLECTION"),
-		Authenticator:         authenticator,
-		ShareStore:            store,
-		ModelService:          models,
-		ToolService:           tools,
-		PromptTemplateService: prompts,
-		SystemService:         system,
-		MemoryService:         memory,
-		AgentInstanceService:  instances,
+		MethodPolicies:             policies,
+		RegisterServices:           opts.GRPCServices,
+		BindAddress:                env("HTTP_BIND_ADDRESS", ":8083"),
+		Reflection:                 envBool("GRPC_REFLECTION"),
+		Authenticator:              authenticator,
+		ShareStore:                 store,
+		ModelService:               models,
+		ToolService:                tools,
+		PromptTemplateService:      prompts,
+		SystemService:              system,
+		MemoryService:              memory,
+		AgentInstanceService:       instances,
+		ScheduledRunService:        schedules,
+		ScheduledRunAccessResolver: schedules,
 		// Both halves of the pair CreateAgentInstance names. Without these two
 		// the only way to author a Harness or an AgentTemplate is kubectl.
 		AgentTemplateService: kubecrud.NewService(manager.GetClient(), authorizer, &kagentv1alpha3.AgentTemplate{}, &kagentv1alpha3.AgentTemplateList{}, "AgentTemplate"),

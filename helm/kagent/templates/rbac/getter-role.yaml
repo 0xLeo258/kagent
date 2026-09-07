@@ -4,6 +4,7 @@
   resources:
   - harnesses
   - agenttemplates
+  - scheduledruns
   - modelconfigs
   - modelproviderconfigs
   - toolservers
@@ -30,6 +31,7 @@
   resources:
   - harnesses/status
   - agenttemplates/status
+  - scheduledruns/status
   - modelconfigs/status
   - modelproviderconfigs/status
   - toolservers/status

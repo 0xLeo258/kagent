@@ -83,9 +83,11 @@ type ActorTemplateHarness struct {
 // AgentInstanceQuery narrows a page of AgentInstances. Zero values mean "do not
 // filter on this", so an empty query lists the caller's own instances.
 type AgentInstanceQuery struct {
-	UserID      string
-	AllUsers    bool
-	MatchLabels map[string]string
+	UserID   string
+	AllUsers bool
+	// ExcludeUserID keeps system-owned conversations out of user-facing lists.
+	ExcludeUserID string
+	MatchLabels   map[string]string
 	// AgentTemplate and Harness name the agent whose conversations are wanted.
 	// They are matched against the (AgentTemplate, Harness) pair the instance's
 	// prepared revision was built from, not against its labels, so they select

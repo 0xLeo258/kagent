@@ -87,6 +87,9 @@ export const paths = {
   mcpServerNew: "/mcp/new",
 
   prompts: "/prompts",
+  schedules: "/schedules",
+  scheduleNew: "/schedules/new",
+  scheduleDetail: "/schedules/:namespace/:name",
   promptNew: "/prompts/new",
   promptDetail: "/prompts/:namespace/:name",
   promptEdit: "/prompts/:namespace/:name/edit",

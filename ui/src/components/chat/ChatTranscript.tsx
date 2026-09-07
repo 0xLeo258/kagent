@@ -31,8 +31,10 @@ export function ChatTranscript({
   chat,
   sessionId,
   onAnswered,
+  readOnly = false,
 }: {
   chat: ChatController;
+  readOnly?: boolean;
   /**
    * An `ask_user` answer has just gone.
    *
@@ -297,7 +299,7 @@ export function ChatTranscript({
         </Tag>
       ) : null}
 
-      {chat.pendingQuestion ? (
+      {chat.pendingQuestion && readOnly ? <Alert type="info" title="The agent is waiting for input" description="This conversation is read-only." /> : chat.pendingQuestion ? (
         /*
          * The conversation is holding a question, and that has to be said.
          *
@@ -325,11 +327,11 @@ export function ChatTranscript({
           data-testid="chat-turn-error"
           title="The agent could not finish this turn"
           description={chat.turnError.message}
-          action={
+          action={!readOnly ?
             <Button size="small" onClick={() => void chat.retry()}>
               Retry
             </Button>
-          }
+          : undefined}
         />
       ) : null}
 

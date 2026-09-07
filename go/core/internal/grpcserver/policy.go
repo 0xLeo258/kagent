@@ -11,6 +11,14 @@ type MethodPolicies map[string]auth.AccessMode
 
 func DefaultMethodPolicies() MethodPolicies {
 	policies := MethodPolicies{
+		apiv1alpha1.ScheduledRunService_ListScheduledRuns_FullMethodName:          auth.AccessRead,
+		apiv1alpha1.ScheduledRunService_GetScheduledRun_FullMethodName:            auth.AccessRead,
+		apiv1alpha1.ScheduledRunService_CreateScheduledRun_FullMethodName:         auth.AccessCreate,
+		apiv1alpha1.ScheduledRunService_UpdateScheduledRun_FullMethodName:         auth.AccessUpdate,
+		apiv1alpha1.ScheduledRunService_DeleteScheduledRun_FullMethodName:         auth.AccessDelete,
+		apiv1alpha1.ScheduledRunService_ListScheduledRunExecutions_FullMethodName: auth.AccessRead,
+		apiv1alpha1.ScheduledRunService_TriggerScheduledRun_FullMethodName:        auth.AccessCreate,
+
 		apiv1alpha1.SystemService_GetVersion_FullMethodName:                   auth.AccessPublic,
 		apiv1alpha1.SystemService_GetCurrentUser_FullMethodName:               auth.AccessRead,
 		apiv1alpha1.SystemService_ListNamespaces_FullMethodName:               auth.AccessRead,

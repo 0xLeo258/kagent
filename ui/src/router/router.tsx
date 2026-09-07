@@ -29,6 +29,9 @@ import { ModelEditPage } from "@/pages/ModelEditPage";
 import { McpServersPage } from "@/pages/McpServersPage";
 import { McpServerNewPage } from "@/pages/McpServerNewPage";
 import { PromptsPage } from "@/pages/PromptsPage";
+import { ScheduledRunsPage } from "@/pages/ScheduledRunsPage";
+import { ScheduledRunNewPage } from "@/pages/ScheduledRunNewPage";
+import { ScheduledRunDetailsPage } from "@/pages/ScheduledRunDetailsPage";
 import { PromptNewPage } from "@/pages/PromptNewPage";
 import { PromptDetailPage } from "@/pages/PromptDetailPage";
 import { PromptEditPage } from "@/pages/PromptEditPage";
@@ -79,6 +82,9 @@ const coreLayoutRoutes: (RouteObject & { key: string })[] = [
   { key: "mcpServers", path: paths.mcpServers, element: <McpServersPage /> },
   { key: "mcpServerNew", path: paths.mcpServerNew, element: <McpServerNewPage /> },
   { key: "prompts", path: paths.prompts, element: <PromptsPage /> },
+  { key: "schedules", path: paths.schedules, element: <ScheduledRunsPage /> },
+  { key: "scheduleNew", path: paths.scheduleNew, element: <ScheduledRunNewPage /> },
+  { key: "scheduleDetail", path: paths.scheduleDetail, element: <ScheduledRunDetailsPage /> },
   { key: "promptNew", path: paths.promptNew, element: <PromptNewPage /> },
   { key: "promptDetail", path: paths.promptDetail, element: <PromptDetailPage /> },
   { key: "promptEdit", path: paths.promptEdit, element: <PromptEditPage /> },

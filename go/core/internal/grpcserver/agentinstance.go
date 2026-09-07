@@ -25,7 +25,12 @@ func (s *agentInstanceServer) GetAgentInstance(ctx context.Context, request *api
 	if err != nil {
 		return nil, err
 	}
-	return &apiv1alpha1.GetAgentInstanceResponse{AgentInstance: instance}, nil
+	response := &apiv1alpha1.GetAgentInstanceResponse{AgentInstance: instance}
+	if access := scheduledRunAccessFrom(ctx); access != nil {
+		response.ReadOnly = access.ReadOnly
+		response.ScheduledRun = true
+	}
+	return response, nil
 }
 
 func (s *agentInstanceServer) ListAgentInstances(ctx context.Context, request *apiv1alpha1.ListAgentInstancesRequest) (*apiv1alpha1.ListAgentInstancesResponse, error) {

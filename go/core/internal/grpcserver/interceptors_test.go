@@ -70,6 +70,20 @@ func TestAuthenticationUnaryInterceptor(t *testing.T) {
 	}
 	session := &testSession{principal: pkgauth.Principal{User: pkgauth.User{ID: "caller"}}}
 
+	t.Run("external caller cannot impersonate scheduler", func(t *testing.T) {
+		authenticator := &testAuthenticator{session: &testSession{principal: pkgauth.Principal{User: pkgauth.User{ID: pkgauth.ScheduledRunUserID}}}}
+		_, err := authenticationUnaryInterceptor(authenticator, nil, policies)(
+			t.Context(), nil, &grpc.UnaryServerInfo{FullMethod: readMethod},
+			func(context.Context, any) (any, error) {
+				t.Fatal("reserved caller reached handler")
+				return nil, nil
+			},
+		)
+		if got := status.Code(err); got != codes.PermissionDenied {
+			t.Fatalf("code = %v, want PermissionDenied", got)
+		}
+	})
+
 	t.Run("public method bypasses authentication", func(t *testing.T) {
 		called := false
 		_, err := authenticationUnaryInterceptor(nil, nil, policies)(

@@ -68,6 +68,9 @@ func authenticate(ctx context.Context, fullMethod string, authenticator auth.Aut
 	if err != nil || session == nil {
 		return ctx, status.Error(codes.Unauthenticated, "invalid credentials")
 	}
+	if session.Principal().User.ID == auth.ScheduledRunUserID && !scheduledMemoryCallback(fullMethod) {
+		return ctx, status.Error(codes.PermissionDenied, "reserved internal identity")
+	}
 
 	authenticatedContext := auth.AuthSessionTo(ctx, session)
 	shareToken := headers.Get("X-Share-Token")
@@ -101,6 +104,22 @@ func authenticate(ctx context.Context, fullMethod string, authenticator auth.Aut
 		ReadOnly:        readOnly,
 		AgentInstanceID: instanceShare.GetAgentInstanceId(),
 	}), nil
+}
+
+// Memory callbacks carry the runtime's user identity, including the scheduler's.
+// These APIs already scope memory by their explicit request fields; permitting
+// them does not grant access to scheduler-owned instances or A2A tasks.
+func scheduledMemoryCallback(method string) bool {
+	switch method {
+	case apiv1alpha1.MemoryService_AddSession_FullMethodName,
+		apiv1alpha1.MemoryService_AddSessionBatch_FullMethodName,
+		apiv1alpha1.MemoryService_Search_FullMethodName,
+		apiv1alpha1.MemoryService_List_FullMethodName,
+		apiv1alpha1.MemoryService_Delete_FullMethodName:
+		return true
+	default:
+		return false
+	}
 }
 
 func incomingHTTPHeaders(ctx context.Context) http.Header {

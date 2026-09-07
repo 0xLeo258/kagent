@@ -554,6 +554,10 @@ func (x *GetAgentInstanceRequest) GetAgentInstanceId() string {
 type GetAgentInstanceResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	AgentInstance *AgentInstance         `protobuf:"bytes,1,opt,name=agent_instance,json=agentInstance,proto3" json:"agent_instance,omitempty"`
+	// Whether the caller may only view this conversation.
+	ReadOnly bool `protobuf:"varint,2,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	// Whether a ScheduledRun owns this conversation's lifecycle.
+	ScheduledRun  bool `protobuf:"varint,3,opt,name=scheduled_run,json=scheduledRun,proto3" json:"scheduled_run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -593,6 +597,20 @@ func (x *GetAgentInstanceResponse) GetAgentInstance() *AgentInstance {
 		return x.AgentInstance
 	}
 	return nil
+}
+
+func (x *GetAgentInstanceResponse) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *GetAgentInstanceResponse) GetScheduledRun() bool {
+	if x != nil {
+		return x.ScheduledRun
+	}
+	return false
 }
 
 type ListAgentInstancesRequest struct {
@@ -1488,9 +1506,11 @@ const file_kagent_api_v1alpha1_agent_instances_proto_rawDesc = "" +
 	"\x1bCreateAgentInstanceResponse\x12I\n" +
 	"\x0eagent_instance\x18\x01 \x01(\v2\".kagent.api.v1alpha1.AgentInstanceR\ragentInstance\"N\n" +
 	"\x17GetAgentInstanceRequest\x123\n" +
-	"\x11agent_instance_id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x0fagentInstanceId\"e\n" +
+	"\x11agent_instance_id\x18\x01 \x01(\tB\a\xbaH\x04r\x02\x10\x01R\x0fagentInstanceId\"\xa7\x01\n" +
 	"\x18GetAgentInstanceResponse\x12I\n" +
-	"\x0eagent_instance\x18\x01 \x01(\v2\".kagent.api.v1alpha1.AgentInstanceR\ragentInstance\"\xa9\x03\n" +
+	"\x0eagent_instance\x18\x01 \x01(\v2\".kagent.api.v1alpha1.AgentInstanceR\ragentInstance\x12\x1b\n" +
+	"\tread_only\x18\x02 \x01(\bR\breadOnly\x12#\n" +
+	"\rscheduled_run\x18\x03 \x01(\bR\fscheduledRun\"\xa9\x03\n" +
 	"\x19ListAgentInstancesRequest\x12b\n" +
 	"\fmatch_labels\x18\x01 \x03(\v2?.kagent.api.v1alpha1.ListAgentInstancesRequest.MatchLabelsEntryR\vmatchLabels\x12!\n" +
 	"\fall_creators\x18\x02 \x01(\bR\vallCreators\x124\n" +

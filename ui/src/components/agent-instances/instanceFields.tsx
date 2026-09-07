@@ -54,7 +54,7 @@ export function instanceFields(
             Untitled · {shortInstanceId(data.id)}
           </Text>
         )}
-        {onRename ? (
+        {onRename && !data.scheduledRun ? (
           <Tooltip title="Rename this conversation">
             <Button
               type="text"

@@ -21,6 +21,7 @@ import (
 	memoryservice "github.com/kagent-dev/kagent/go/core/internal/service/memory"
 	modelservice "github.com/kagent-dev/kagent/go/core/internal/service/model"
 	prompttemplateservice "github.com/kagent-dev/kagent/go/core/internal/service/prompttemplate"
+	scheduledrunservice "github.com/kagent-dev/kagent/go/core/internal/service/scheduledrun"
 	systemservice "github.com/kagent-dev/kagent/go/core/internal/service/system"
 	toolservice "github.com/kagent-dev/kagent/go/core/internal/service/tool"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
@@ -39,25 +40,31 @@ const (
 	defaultShutdownTimeout = 5 * time.Second
 )
 
+type ScheduledRunAccessResolver interface {
+	ResolveInstanceAccess(context.Context, string) (*auth.ShareContext, error)
+}
+
 type Config struct {
-	BindAddress           string
-	MaxMessageBytes       int
-	Reflection            bool
-	TLSCertFile           string
-	TLSKeyFile            string
-	Authenticator         auth.AuthProvider
-	ShareStore            ShareStore
-	Registerer            prometheus.Registerer
-	AgentTemplateService  *kubecrud.Service[*v1alpha3.AgentTemplate, *v1alpha3.AgentTemplateList]
-	HarnessService        *kubecrud.Service[*v1alpha3.Harness, *v1alpha3.HarnessList]
-	ModelService          *modelservice.Service
-	ToolService           *toolservice.Service
-	PromptTemplateService *prompttemplateservice.Service
-	SystemService         *systemservice.Service
-	MemoryService         *memoryservice.Service
-	AgentInstanceService  *agentinstance.Service
-	CheckpointService     *checkpoint.Service
-	A2AHandler            a2asrv.RequestHandler
+	ScheduledRunService        *scheduledrunservice.Service
+	ScheduledRunAccessResolver ScheduledRunAccessResolver
+	BindAddress                string
+	MaxMessageBytes            int
+	Reflection                 bool
+	TLSCertFile                string
+	TLSKeyFile                 string
+	Authenticator              auth.AuthProvider
+	ShareStore                 ShareStore
+	Registerer                 prometheus.Registerer
+	AgentTemplateService       *kubecrud.Service[*v1alpha3.AgentTemplate, *v1alpha3.AgentTemplateList]
+	HarnessService             *kubecrud.Service[*v1alpha3.Harness, *v1alpha3.HarnessList]
+	ModelService               *modelservice.Service
+	ToolService                *toolservice.Service
+	PromptTemplateService      *prompttemplateservice.Service
+	SystemService              *systemservice.Service
+	MemoryService              *memoryservice.Service
+	AgentInstanceService       *agentinstance.Service
+	CheckpointService          *checkpoint.Service
+	A2AHandler                 a2asrv.RequestHandler
 	// RegisterServices registers services core does not own. Called during New,
 	// because gRPC requires every service to be registered before Serve.
 	RegisterServices func(grpc.ServiceRegistrar)
@@ -106,6 +113,7 @@ func New(config Config) (*Server, error) {
 			recoverUnaryInterceptor,
 			authenticationUnaryInterceptor(config.Authenticator, config.ShareStore, config.MethodPolicies),
 			protovalidatemiddleware.UnaryServerInterceptor(validator),
+			scheduledRunUnaryInterceptor(config.ScheduledRunAccessResolver),
 			errorMappingUnaryInterceptor,
 		),
 		grpc.ChainStreamInterceptor(
@@ -113,6 +121,7 @@ func New(config Config) (*Server, error) {
 			metrics.streamInterceptor,
 			recoverStreamInterceptor,
 			authenticationStreamInterceptor(config.Authenticator, config.ShareStore, config.MethodPolicies),
+			scheduledRunStreamInterceptor(config.ScheduledRunAccessResolver),
 			errorMappingStreamInterceptor,
 		),
 	}
@@ -126,6 +135,9 @@ func New(config Config) (*Server, error) {
 	healthServer := health.NewServer()
 	grpc_health_v1.RegisterHealthServer(grpcServer, healthServer)
 	apiv1alpha1.RegisterSystemServiceServer(grpcServer, newSystemServer(config.SystemService))
+	if config.ScheduledRunService != nil {
+		apiv1alpha1.RegisterScheduledRunServiceServer(grpcServer, &scheduledRunServer{service: config.ScheduledRunService, maxMessageBytes: config.MaxMessageBytes})
+	}
 	if config.AgentTemplateService != nil {
 		apiv1alpha1.RegisterAgentTemplateServiceServer(grpcServer, newAgentTemplateServer(config.AgentTemplateService, config.MaxMessageBytes))
 	}

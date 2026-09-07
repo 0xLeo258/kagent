@@ -12,6 +12,7 @@
  */
 
 import type { ModelConfig, ModelConfigSpec } from "@/api/domain/models";
+import { SCHEDULED_INSTANCE_ID } from "./scheduledRuns";
 import type { ToolServerResponse } from "@/api/domain/mcpServers";
 import type {
   PromptTemplateDetail,
@@ -415,7 +416,9 @@ export const agentInstanceRef = (row: AgentInstance) => row.id;
  */
 export function allAgentInstances(): AgentInstance[] {
   return dedupeByRef(
-    [...mockAgentInstances, ...created.agentInstances],
+    [...mockAgentInstances, {
+      id: SCHEDULED_INSTANCE_ID, contextId: SCHEDULED_INSTANCE_ID, name: "Scheduled cluster report", creator: "scheduled-run", harness: "kagent/k8s-agent", agentTemplate: "kagent/k8s-agent-7f3a91c", state: "ready", operation: "unspecified", createdAt: "2026-09-07T09:00:00Z", updatedAt: "2026-09-07T09:00:05Z", labels: {}, scheduledRun: true, readOnly: true,
+    }, ...created.agentInstances],
     agentInstanceRef,
   ).filter((row) => isLive(agentInstanceRef(row)));
 }

@@ -72,6 +72,9 @@ export * from "./domain/prompts";
 export * from "./domain/harnesses";
 export * from "./domain/agentTemplates";
 export * from "./domain/agentPairs";
+export * from "./domain/scheduledRuns";
+export { useScheduledRun, useScheduledRuns } from "./hooks/useScheduledRuns";
+export { useScheduledRunExecutions } from "./hooks/useScheduledRunExecutions";
 
 export { useMcpServers, useTools } from "./hooks/useMcpServers";
 export {

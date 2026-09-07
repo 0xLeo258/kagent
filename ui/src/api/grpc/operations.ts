@@ -36,6 +36,8 @@
  */
 
 import { ModelService } from "@/generated/kagent/api/v1alpha1/models_pb";
+import { ScheduledRunService, type ScheduledRun as PbScheduledRun, type ScheduledRunExecution as PbScheduledRunExecution } from "@/generated/kagent/api/v1alpha1/scheduled_runs_pb";
+import type { ScheduledRun, ScheduledRunExecution, ScheduledRunResource, ScheduledRunWrite } from "../domain/scheduledRuns";
 import { ToolService } from "@/generated/kagent/api/v1alpha1/tools_pb";
 import { PromptTemplateService } from "@/generated/kagent/api/v1alpha1/prompts_pb";
 import { SystemService } from "@/generated/kagent/api/v1alpha1/system_pb";
@@ -805,7 +807,11 @@ const agentInstances: Pick<
         call("agentInstances.get", options),
       ),
     );
-    return toAgentInstance(required(response.agentInstance, name, "agent instance"));
+    return {
+      ...toAgentInstance(required(response.agentInstance, name, "agent instance")),
+      ...(response.readOnly ? { readOnly: true } : {}),
+      ...(response.scheduledRun ? { scheduledRun: true } : {}),
+    };
   },
 
   /*
@@ -1262,6 +1268,45 @@ function required<T>(value: T | undefined, rpcName: string, what: string): T {
  * declared in `OperationMap` without appearing here — the compiler insists.
  */
 export const defaultOperations: ApiOperations = {
+  "scheduledRuns.list": async (input, options) => {
+    const name = "ScheduledRunService/ListScheduledRuns";
+    const response = await rpc(name, options.signal, () => serviceClient(ScheduledRunService)
+      .listScheduledRuns({ namespace: input.namespace ?? "" }, call("scheduledRuns.list", options)));
+    return list(response.scheduledRuns).map((entry) => toScheduledRun(entry, name));
+  },
+  "scheduledRuns.get": async (input, options) => {
+    const name = "ScheduledRunService/GetScheduledRun";
+    const response = await rpc(name, options.signal, () => serviceClient(ScheduledRunService)
+      .getScheduledRun({ ref: input }, call("scheduledRuns.get", options)));
+    return toScheduledRun(required(response.scheduledRun, name, "scheduled run"), name);
+  },
+  "scheduledRuns.create": async (input, options) => {
+    const name = "ScheduledRunService/CreateScheduledRun";
+    const response = await rpc(name, options.signal, () => serviceClient(ScheduledRunService)
+      .createScheduledRun(scheduledRunPayload(input), call("scheduledRuns.create", options)));
+    return toScheduledRun(required(response.scheduledRun, name, "scheduled run"), name);
+  },
+  "scheduledRuns.update": async (input, options) => {
+    const name = "ScheduledRunService/UpdateScheduledRun";
+    const response = await rpc(name, options.signal, () => serviceClient(ScheduledRunService)
+      .updateScheduledRun(scheduledRunPayload(input), call("scheduledRuns.update", options)));
+    return toScheduledRun(required(response.scheduledRun, name, "scheduled run"), name);
+  },
+  "scheduledRuns.delete": async (input, options) => {
+    await rpc("ScheduledRunService/DeleteScheduledRun", options.signal, () => serviceClient(ScheduledRunService)
+      .deleteScheduledRun({ ref: input }, call("scheduledRuns.delete", options)));
+  },
+  "scheduledRuns.trigger": async (input, options) => {
+    const name = "ScheduledRunService/TriggerScheduledRun";
+    const response = await rpc(name, options.signal, () => serviceClient(ScheduledRunService)
+      .triggerScheduledRun({ ref: input }, call("scheduledRuns.trigger", options)));
+    return toScheduledRunExecution(required(response.execution, name, "execution"));
+  },
+  "scheduledRuns.executions": async (input, options) => {
+    const response = await rpc("ScheduledRunService/ListScheduledRunExecutions", options.signal, () => serviceClient(ScheduledRunService)
+      .listScheduledRunExecutions({ ref: { namespace: input.namespace, name: input.name }, page: { limit: 50, pageToken: input.pageToken ?? "" } }, call("scheduledRuns.executions", options)));
+    return { executions: list(response.executions).map(toScheduledRunExecution), nextPageToken: orUndefined(response.page?.nextPageToken) };
+  },
   ...agentBuildingBlocks,
   ...models,
   ...toolServers,
@@ -1269,3 +1314,37 @@ export const defaultOperations: ApiOperations = {
   ...agentInstances,
   ...cluster,
 };
+
+function toScheduledRun(entry: PbScheduledRun, rpcName: string): ScheduledRun {
+  const resource = unwrap<ScheduledRunResource>(entry.resource, rpcName, "scheduled run");
+  if (!resource.spec?.targetRef?.name || !resource.spec.harnessRef?.name || !entry.ref?.namespace || !entry.ref.name) {
+    throw new ApiError("The scheduled run is missing its identity or agent references.", { kind: "parse", url: rpcName });
+  }
+  return { namespace: entry.ref.namespace, name: entry.ref.name, resource };
+}
+
+function scheduledRunPayload(input: ScheduledRunWrite) {
+  const { labels, annotations } = input.resource.metadata;
+  return {
+    ref: { namespace: input.namespace, name: input.name },
+    resource: wrap("ScheduledRun", {
+      apiVersion: KAGENT_API_VERSION,
+      kind: "ScheduledRun",
+      metadata: { namespace: input.namespace, name: input.name, ...(labels ? { labels } : {}), ...(annotations ? { annotations } : {}) },
+      spec: input.resource.spec,
+    }),
+  };
+}
+
+function toScheduledRunExecution(entry: PbScheduledRunExecution): ScheduledRunExecution {
+  return {
+    id: entry.id,
+    startTime: isoFrom(entry.startTime),
+    completionTime: orUndefined(isoFrom(entry.completionTime)),
+    trigger: entry.trigger,
+    agentInstanceId: orUndefined(entry.agentInstanceId),
+    taskId: orUndefined(entry.taskId),
+    status: entry.status,
+    statusMessage: orUndefined(entry.statusMessage),
+  };
+}

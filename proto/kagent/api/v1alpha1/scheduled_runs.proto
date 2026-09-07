@@ -1,0 +1,127 @@
+syntax = "proto3";
+
+package kagent.api.v1alpha1;
+
+import "buf/validate/validate.proto";
+import "google/protobuf/timestamp.proto";
+import "kagent/api/v1alpha1/common.proto";
+
+option go_package = "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1;apiv1alpha1";
+
+// ScheduledRunService manages recurring AgentTemplate executions.
+service ScheduledRunService {
+  rpc ListScheduledRuns(ListScheduledRunsRequest) returns (ListScheduledRunsResponse);
+  rpc GetScheduledRun(GetScheduledRunRequest) returns (GetScheduledRunResponse);
+  rpc CreateScheduledRun(CreateScheduledRunRequest) returns (CreateScheduledRunResponse);
+  rpc UpdateScheduledRun(UpdateScheduledRunRequest) returns (UpdateScheduledRunResponse);
+  rpc DeleteScheduledRun(DeleteScheduledRunRequest) returns (DeleteScheduledRunResponse);
+  rpc ListScheduledRunExecutions(ListScheduledRunExecutionsRequest) returns (ListScheduledRunExecutionsResponse);
+  rpc TriggerScheduledRun(TriggerScheduledRunRequest) returns (TriggerScheduledRunResponse);
+}
+
+message ScheduledRun {
+  ResourceReference ref = 1;
+  // The complete kagent.dev/v1alpha3 ScheduledRun Kubernetes resource.
+  StructuredObject resource = 2;
+}
+
+message ScheduledRunExecution {
+  string id = 1;
+  google.protobuf.Timestamp start_time = 2;
+  google.protobuf.Timestamp completion_time = 3;
+  string trigger = 4;
+  // Empty until the execution's AgentInstance has been created.
+  string agent_instance_id = 5;
+  string task_id = 6;
+  string status = 7;
+  string status_message = 8;
+}
+
+message ListScheduledRunsRequest {
+  string namespace = 1 [(buf.validate.field).string.min_len = 1];
+}
+
+message ListScheduledRunsResponse {
+  repeated ScheduledRun scheduled_runs = 1;
+}
+
+message GetScheduledRunRequest {
+  option (buf.validate.message).cel = {
+    id: "scheduled_run.ref"
+    message: "ScheduledRun namespace and name are required"
+    expression: "has(this.ref) && this.ref.namespace != '' && this.ref.name != ''"
+  };
+  ResourceReference ref = 1 [(buf.validate.field).required = true];
+}
+
+message GetScheduledRunResponse {
+  ScheduledRun scheduled_run = 1;
+}
+
+message CreateScheduledRunRequest {
+  option (buf.validate.message).cel = {
+    id: "scheduled_run.ref"
+    message: "ScheduledRun namespace and name are required"
+    expression: "has(this.ref) && this.ref.namespace != '' && this.ref.name != ''"
+  };
+  ResourceReference ref = 1 [(buf.validate.field).required = true];
+  StructuredObject resource = 2 [(buf.validate.field).required = true];
+}
+
+message CreateScheduledRunResponse {
+  ScheduledRun scheduled_run = 1;
+}
+
+message UpdateScheduledRunRequest {
+  option (buf.validate.message).cel = {
+    id: "scheduled_run.ref"
+    message: "ScheduledRun namespace and name are required"
+    expression: "has(this.ref) && this.ref.namespace != '' && this.ref.name != ''"
+  };
+  ResourceReference ref = 1 [(buf.validate.field).required = true];
+  StructuredObject resource = 2 [(buf.validate.field).required = true];
+}
+
+message UpdateScheduledRunResponse {
+  ScheduledRun scheduled_run = 1;
+}
+
+message DeleteScheduledRunRequest {
+  option (buf.validate.message).cel = {
+    id: "scheduled_run.ref"
+    message: "ScheduledRun namespace and name are required"
+    expression: "has(this.ref) && this.ref.namespace != '' && this.ref.name != ''"
+  };
+  ResourceReference ref = 1 [(buf.validate.field).required = true];
+}
+
+message DeleteScheduledRunResponse {}
+
+message ListScheduledRunExecutionsRequest {
+  option (buf.validate.message).cel = {
+    id: "scheduled_run.ref"
+    message: "ScheduledRun namespace and name are required"
+    expression: "has(this.ref) && this.ref.namespace != '' && this.ref.name != ''"
+  };
+  ResourceReference ref = 1 [(buf.validate.field).required = true];
+  PageRequest page = 2;
+}
+
+message ListScheduledRunExecutionsResponse {
+  repeated ScheduledRunExecution executions = 1;
+  PageResponse page = 2;
+}
+
+message TriggerScheduledRunRequest {
+  option (buf.validate.message).cel = {
+    id: "scheduled_run.ref"
+    message: "ScheduledRun namespace and name are required"
+    expression: "has(this.ref) && this.ref.namespace != '' && this.ref.name != ''"
+  };
+  ResourceReference ref = 1 [(buf.validate.field).required = true];
+}
+
+message TriggerScheduledRunResponse {
+  // The durable execution accepted for asynchronous dispatch.
+  ScheduledRunExecution execution = 1;
+}

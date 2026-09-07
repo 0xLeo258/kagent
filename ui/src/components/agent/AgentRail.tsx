@@ -18,6 +18,7 @@ import { useConversationTitles } from "@/api/hooks/useConversationTitles";
 import toast from "react-hot-toast";
 import {
   Bot,
+  Clock,
   ChevronsUpDown,
   Folder,
   MoreVertical,
@@ -30,6 +31,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { paths } from "@/router/routes";
 import {
   apiClient,
   bareName,
@@ -263,8 +265,14 @@ export function AgentRail({
    * places holding the same facts. The details entry stays lit while editing, because
    * that is where the reader came from and where saving returns them.
    */
-  const entries: RailLink[] = [
-  ];
+  const scheduleAgent = agentPair ?? (instance ? { namespace: instance.agentTemplate?.split("/")[0] ?? "", agentTemplate: bareName(instance.agentTemplate ?? ""), harness: bareName(instance.harness ?? "") } : undefined);
+  const scheduleQuery = scheduleAgent?.agentTemplate && scheduleAgent.harness
+    ? new URLSearchParams({ namespace: scheduleAgent.namespace, agentTemplate: scheduleAgent.agentTemplate, harness: scheduleAgent.harness }).toString()
+    : undefined;
+  const entries: RailLink[] = scheduleQuery ? [
+    { label: "Schedules", to: `${paths.schedules}?${scheduleQuery}`, icon: Clock, testId: "agent-schedules" },
+    { label: "New schedule", to: `${paths.scheduleNew}?${scheduleQuery}`, icon: Clock, testId: "agent-new-schedule" },
+  ] : [];
 
   /*
    * Up to the agent, when the instance names a pair.
@@ -349,7 +357,7 @@ export function AgentRail({
             candidate.id.toLowerCase().includes(needle) ||
             candidate.name.toLowerCase().includes(needle),
         );
-    return [...found].sort(byNewestFirst);
+    return found.map((candidate) => candidate.id === instance?.id ? instance : candidate).sort(byNewestFirst);
   }, [conversations.data, instance, query]);
 
   /*
@@ -473,7 +481,7 @@ export function AgentRail({
    * which are already state, and a copy would go stale the moment either changed.
    */
 
-  const visibleIds = chats.map((chat) => chat.id);
+  const visibleIds = chats.filter((chat) => !chat.scheduledRun).map((chat) => chat.id);
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selected.has(id));
 
@@ -1429,6 +1437,7 @@ function ChatEntry({
         />
         <Checkbox
           checked={isSelected}
+          disabled={instance.scheduledRun}
           data-testid={`chat-session-select-${instance.id}`}
           aria-label={`Select ${conversationLabel(instance, autoTitle)}`}
           onClick={(event) => {
@@ -1482,7 +1491,7 @@ function ChatEntry({
         and nowhere else. The rail owns the delete now, so the row behaves the same on
         every surface that mounts it.
       */}
-      <Dropdown
+      {!instance.scheduledRun && <Dropdown
         trigger={["click"]}
         menu={{
           items: [
@@ -1519,7 +1528,7 @@ function ChatEntry({
             "li:hover &, &:focus-visible, &[aria-expanded='true']": { opacity: 1 },
           }}
         />
-      </Dropdown>
+      </Dropdown>}
 
       {/* Beside the menu that opens it rather than at the rail's root: the row already
           holds the delete confirmation the same way, and one dialog per row costs

@@ -21,6 +21,7 @@ import type { OperationId, OperationInput } from "@/api/operations";
 import { setApiTransport } from "@/api/transport";
 import { mockTransport } from "./transport";
 import { MOCK_INSTANCE_CREATOR } from "./fixtures";
+import { fixtureScheduledRun } from "./scheduledRuns";
 
 beforeAll(() => setApiTransport(mockTransport));
 afterAll(() => setApiTransport(undefined));
@@ -42,6 +43,13 @@ afterEach(() => clearApiExtensions());
  * the whole surface.
  */
 const INPUTS = {
+  "scheduledRuns.list": { namespace: "kagent" },
+  "scheduledRuns.get": { namespace: "kagent", name: "daily-report" },
+  "scheduledRuns.create": { ...fixtureScheduledRun("swept-schedule") },
+  "scheduledRuns.update": { ...fixtureScheduledRun("daily-report") },
+  "scheduledRuns.delete": { namespace: "kagent", name: "removable-run" },
+  "scheduledRuns.trigger": { namespace: "kagent", name: "daily-report" },
+  "scheduledRuns.executions": { namespace: "kagent", name: "daily-report" },
   "models.list": {},
   "models.get": { namespace: "kagent", name: "default-model-config" },
   "models.create": {

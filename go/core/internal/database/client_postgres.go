@@ -456,6 +456,15 @@ func (c *Client) GetAgentInstance(ctx context.Context, id, userID string) (*apiv
 	return toAgentInstance(row)
 }
 
+// GetAgentInstanceByRequestID recovers an already-reserved instance without provisioning it.
+func (c *Client) GetAgentInstanceByRequestID(ctx context.Context, creator, requestID string) (*apiv1alpha1.AgentInstance, error) {
+	row, err := c.q.GetAgentInstanceByRequest(ctx, dbgen.GetAgentInstanceByRequestParams{UserID: creator, RequestID: requestID})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get AgentInstance for request %s: %w", requestID, notFoundOr(err))
+	}
+	return toAgentInstance(row)
+}
+
 func (c *Client) ListAgentInstances(ctx context.Context, query AgentInstanceQuery) ([]*apiv1alpha1.AgentInstance, error) {
 	matchLabels := query.MatchLabels
 	if matchLabels == nil {
@@ -466,7 +475,7 @@ func (c *Client) ListAgentInstances(ctx context.Context, query AgentInstanceQuer
 		return nil, fmt.Errorf("marshal AgentInstance label selector: %w", err)
 	}
 	rows, err := c.q.ListAgentInstances(ctx, dbgen.ListAgentInstancesParams{
-		UserID: query.UserID, AllUsers: query.AllUsers,
+		UserID: query.UserID, AllUsers: query.AllUsers, ExcludeUserID: query.ExcludeUserID,
 		AfterID: query.AfterID, MatchLabels: labels,
 		AgentTemplate: query.AgentTemplate.GetName(), AgentTemplateNamespace: query.AgentTemplate.GetNamespace(), Harness: query.Harness.GetName(), HarnessNamespace: query.Harness.GetNamespace(),
 		PageSize: int32(query.Limit),

@@ -1,5 +1,6 @@
 import {
   Bot,
+  Clock,
   Boxes,
   Cpu,
   LayoutDashboard,
@@ -32,6 +33,7 @@ export const coreNavItems: NavItem[] = [
     order: 100,
   },
   { key: "agents", label: "Agents", path: paths.agents, icon: Bot, order: 200 },
+  { key: "schedules", label: "Schedules", path: paths.schedules, icon: Clock, order: 250 },
   
   { key: "models", label: "Models", path: paths.models, icon: Cpu, order: 300 },
   {

@@ -154,7 +154,10 @@ export function useChat(
    * pressed against one.
    */
   beforeSend?: () => Promise<void>,
+  { readOnly = false }: { readOnly?: boolean } = {},
 ): ChatController {
+  const readOnlyRef = useRef(readOnly);
+  useEffect(() => { readOnlyRef.current = readOnly; }, [readOnly]);
   // The key, not the ref, is what everything below is stamped with and what every
   // dependency list watches — see `Transcript`.
   const key = conversation ? conversationKey(conversation) : undefined;
@@ -243,7 +246,7 @@ export function useChat(
 
   const run = useCallback(
     async (text: string, hitl?: Record<string, unknown>) => {
-      if (!conversation || !key || !text.trim()) return;
+      if (!conversation || !key || !text.trim() || readOnlyRef.current) return;
 
       // Before anything is dispatched: a failure here means the turn never began,
       // and half-starting one would leave the transcript showing a message that was
@@ -430,6 +433,7 @@ export function useChat(
   );
 
   const cancel = useCallback(async () => {
+    if (readOnlyRef.current) return;
     const controller = abortRef.current;
     if (!controller) return;
 
@@ -463,6 +467,7 @@ export function useChat(
    * composer that is still refused.
    */
   const dismissQuestion = useCallback(async () => {
+    if (readOnlyRef.current) return;
     const parked = pendingRef.current;
     if (!conversation || !key || parked?.key !== key) return;
 

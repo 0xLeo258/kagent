@@ -4,6 +4,7 @@
   resources:
   - harnesses
   - agenttemplates
+  - scheduledruns
   - modelconfigs
   - modelproviderconfigs
   - toolservers

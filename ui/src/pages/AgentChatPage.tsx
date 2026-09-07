@@ -129,7 +129,8 @@ export function AgentChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [instance.data?.state, id]);
 
-  const chat = useChat(conversation, resumeFirst);
+  const readOnly = !instance.data || instance.data.readOnly === true;
+  const chat = useChat(conversation, resumeFirst, { readOnly });
 
   /*
    * The other side of a share writes here too.
@@ -196,7 +197,7 @@ export function AgentChatPage() {
    * carried through by resuming, so those still say so and disable the box.
    */
   const isSuspended = state === "suspended";
-  const canSend = isReady || isSuspended;
+  const canSend = !readOnly && (isReady || isSuspended);
 
   /*
    * Watching the instance while it is doing something.
@@ -285,7 +286,7 @@ export function AgentChatPage() {
      * wire: a conversation showing what you typed, never answering, and no
      * `SendStreamingMessage` in the controller's log at all.
      */
-    if (!pending || sentInitial.current || !conversation || chat.isLoadingHistory) return;
+    if (!pending || sentInitial.current || !conversation || chat.isLoadingHistory || !canSend) return;
     sentInitial.current = true;
     /*
      * Sent before the history entry is cleared, not after.
@@ -313,7 +314,7 @@ export function AgentChatPage() {
     // Keyed on the conversation, not on `chat`: the controller is rebuilt every render
     // and depending on it would re-run this on each one.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, chat.isLoadingHistory]);
+  }, [id, chat.isLoadingHistory, canSend]);
   const isBusy = isLifecycleBusy(instance.data, chat.turnPhase, isAwaitingReply);
 
   /*
@@ -420,7 +421,7 @@ export function AgentChatPage() {
             gutterActions={
               conversation ? (
                 <>
-                <Tooltip title="Share this conversation" placement="right">
+                {instance.data && !instance.data.scheduledRun && <Tooltip title="Share this conversation" placement="right">
                   <Button
                     type="text"
                     size="small"
@@ -430,7 +431,7 @@ export function AgentChatPage() {
                     data-testid="chat-share"
                     css={iconControlStyles(theme)}
                   />
-                </Tooltip>
+                </Tooltip>}
                 {/* Under Share, in the same gutter. It was an entry in the rail, which
                     meant leaving the conversation to read four facts about it and then
                     finding the way back — reference that costs a navigation is
@@ -528,7 +529,8 @@ export function AgentChatPage() {
           {/* The controller's own precondition, said rather than discovered. A
               suspended agent is resumable from the agents list, which is why the
               state is named rather than the page simply refusing. */}
-          {instance.data && !canSend ? (
+          {instance.data?.scheduledRun && <Alert type="info" showIcon data-testid="scheduled-conversation-notice" title={readOnly ? "Scheduled conversation, read-only" : "Scheduled conversation"} description={readOnly ? "This schedule does not allow replies or changes to its conversations." : "Replies are allowed by this schedule. Sharing, renaming and deleting its conversations are managed by the schedule."} />}
+          {instance.data && !readOnly && !canSend ? (
             <Alert
               type="warning"
               showIcon
@@ -545,6 +547,7 @@ export function AgentChatPage() {
               do it in and nothing else. */}
           <ChatTranscript
             chat={chat}
+            readOnly={readOnly}
             sessionId={id}
             // The question is answered in a field inside the transcript, and once it
             // has been, the next thing typed is an ordinary message. The transcript
@@ -575,7 +578,7 @@ export function AgentChatPage() {
               ref={composerRef}
               send={chat.send}
               isStreaming={chat.phase === "streaming"}
-              onCancel={chat.cancel}
+              onCancel={readOnly ? undefined : chat.cancel}
               // Disabled rather than hidden: a missing composer reads as a rendering
               // fault, where a disabled one with the state named above it explains
               // itself. A conversation holding a question keeps its composer, because
@@ -675,7 +678,7 @@ export function AgentChatPage() {
         onClose={() => setShowingDetails(false)}
       />
 
-      {conversation ? (
+      {conversation && instance.data && !instance.data.scheduledRun ? (
         <ShareDialog
           conversation={conversation}
           open={isSharing}

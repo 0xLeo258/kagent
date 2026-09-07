@@ -78,6 +78,9 @@ import type { Transport, UnaryResponse } from "@connectrpc/connect";
 import { HarnessService } from "@/generated/kagent/api/v1alpha1/harnesses_pb";
 import { AgentTemplateService } from "@/generated/kagent/api/v1alpha1/agent_templates_pb";
 import { ModelService } from "@/generated/kagent/api/v1alpha1/models_pb";
+import { ScheduledRunService } from "@/generated/kagent/api/v1alpha1/scheduled_runs_pb";
+import type { ScheduledRunResource } from "@/api/domain/scheduledRuns";
+import { allScheduledRuns, findScheduledRun, saveScheduledRun, removeScheduledRun, scheduledExecutions, recordScheduledExecution } from "./scheduledRuns";
 import { ToolService } from "@/generated/kagent/api/v1alpha1/tools_pb";
 import { PromptTemplateService } from "@/generated/kagent/api/v1alpha1/prompts_pb";
 import { SystemService } from "@/generated/kagent/api/v1alpha1/system_pb";
@@ -565,6 +568,51 @@ on(PromptTemplateService.method.deletePromptTemplate, (input) => {
   return {};
 });
 
+function scheduledRunFor(ref: { namespace: string; name: string } | undefined, call: MockCall) {
+  requireNamespace(ref?.namespace ?? "");
+  const run = call.scenario === "empty" ? undefined : findScheduledRun(refString(ref));
+  if (!run) throw notFound(`ScheduledRun ${refString(ref)}`);
+  return run;
+}
+
+function scheduledRunMessage(run: { namespace: string; name: string; resource: ScheduledRunResource }) {
+  return { ref: { namespace: run.namespace, name: run.name }, resource: structured("ScheduledRun", run.resource) };
+}
+
+on(ScheduledRunService.method.listScheduledRuns, (input, call) => {
+  requireNamespace(input.namespace);
+  return { scheduledRuns: call.scenario === "empty" ? [] : allScheduledRuns().filter((run) => run.namespace === input.namespace).map(scheduledRunMessage) };
+});
+on(ScheduledRunService.method.getScheduledRun, (input, call) => ({ scheduledRun: scheduledRunMessage(scheduledRunFor(input.ref, call)) }));
+on(ScheduledRunService.method.createScheduledRun, (input) => {
+  const namespace = requireNamespace(input.ref?.namespace ?? "");
+  const name = requireOptionalName("name", input.ref?.name);
+  if (!name) throw new ConnectError("A schedule name is required", Code.InvalidArgument);
+  if (findScheduledRun(`${namespace}/${name}`)) throw new ConnectError("Schedule already exists", Code.AlreadyExists);
+  return { scheduledRun: scheduledRunMessage(saveScheduledRun(namespace, name, valueOf<ScheduledRunResource>(input.resource, "ScheduledRun"))) };
+});
+on(ScheduledRunService.method.updateScheduledRun, (input, call) => {
+  const run = scheduledRunFor(input.ref, call);
+  const resource = valueOf<ScheduledRunResource>(input.resource, "ScheduledRun");
+  if (resource.spec.targetRef.name !== run.resource.spec.targetRef.name || resource.spec.targetRef.kind !== run.resource.spec.targetRef.kind || resource.spec.targetRef.apiGroup !== run.resource.spec.targetRef.apiGroup || resource.spec.harnessRef.name !== run.resource.spec.harnessRef.name) throw new ConnectError("Agent references are immutable", Code.InvalidArgument);
+  return { scheduledRun: scheduledRunMessage(saveScheduledRun(run.namespace, run.name, resource)) };
+});
+on(ScheduledRunService.method.deleteScheduledRun, (input, call) => { scheduledRunFor(input.ref, call); removeScheduledRun(refString(input.ref)); return {}; });
+on(ScheduledRunService.method.triggerScheduledRun, (input, call) => {
+  const run = scheduledRunFor(input.ref, call);
+  const execution = { id: crypto.randomUUID(), startTime: new Date().toISOString(), trigger: "Manual", status: "InProgress", statusMessage: "Queued for dispatch" };
+  recordScheduledExecution(`${run.namespace}/${run.name}`, execution);
+  return { execution: { ...execution, startTime: stamp(execution.startTime) } };
+});
+on(ScheduledRunService.method.listScheduledRunExecutions, (input, call) => {
+  scheduledRunFor(input.ref, call);
+  const offset = Number(input.page?.pageToken ?? 0);
+  if (!Number.isInteger(offset) || offset < 0) throw new ConnectError("Invalid page token", Code.InvalidArgument);
+  const rows = scheduledExecutions(refString(input.ref));
+  const limit = input.page?.limit || 50;
+  return { executions: rows.slice(offset, offset + limit).map((entry) => ({ ...entry, startTime: stamp(entry.startTime), completionTime: stamp(entry.completionTime) })), page: { nextPageToken: offset + limit < rows.length ? String(offset + limit) : "" } };
+});
+
 // ---------------------------------------------------------------------------
 // Agent instances
 // ---------------------------------------------------------------------------
@@ -747,6 +795,11 @@ function instanceFor(id: string, call: MockCall): AgentInstance {
    * without it the mock would happily open a conversation the controller refuses,
    * and the page could claim a link works when it does not.
    */
+  if (found.scheduledRun) {
+    const schedule = findScheduledRun("kagent/daily-report");
+    if (!schedule) throw notFound("ScheduledRun kagent/daily-report");
+    return { ...found, readOnly: !schedule.resource.spec.allowSessionInteraction };
+  }
   if (found.creator !== MOCK_INSTANCE_CREATOR) {
     throw notFound(`AgentInstance ${id}`);
   }
@@ -777,6 +830,8 @@ function lifecycle(
     requireInstanceId(id),
     call,
   );
+
+  if (instance.readOnly) throw new ConnectError("Scheduled conversation is read-only", Code.PermissionDenied);
 
   if (instance.operation !== "unspecified") {
     throw new ConnectError(
@@ -817,6 +872,7 @@ on(AgentInstanceService.method.listAgentInstances, (input, call) => {
   const harnessFilter = input.harness ? `${requireNamespace(input.harness.namespace)}/${requireOptionalName("harness", input.harness.name)}` : "";
 
   const matching = allAgentInstances().filter((row) => {
+    if (row.scheduledRun) return false;
     // Somebody else's instances are excluded unless asked for, which is what the
     // controller does with the authenticated user. Mock mode has nobody signed in,
     // so every caller is treated as one fixed person — see `MOCK_INSTANCE_CREATOR`.
@@ -845,14 +901,13 @@ on(AgentInstanceService.method.listAgentInstances, (input, call) => {
   };
 });
 
-on(AgentInstanceService.method.getAgentInstance, (input, call) => ({
-  agentInstance: agentInstanceMessage(
-    instanceFor(
+on(AgentInstanceService.method.getAgentInstance, (input, call) => {
+  const instance = instanceFor(
       requireInstanceId(input.agentInstanceId),
       call,
-    ),
-  ),
-}));
+    );
+  return { agentInstance: agentInstanceMessage(instance), readOnly: instance.readOnly ?? false, scheduledRun: instance.scheduledRun ?? false };
+});
 
 on(AgentInstanceService.method.suspendAgentInstance, (input, call) => ({
   agentInstance: agentInstanceMessage(
@@ -927,6 +982,7 @@ on(AgentInstanceService.method.updateAgentInstanceName, (input, call) => {
     call,
   );
   const name = requireInstanceName(input.name);
+  if (instance.scheduledRun) throw new ConnectError("Scheduled conversations cannot be renamed", Code.PermissionDenied);
   return {
     agentInstance: agentInstanceMessage(
       saveAgentInstance({
@@ -944,6 +1000,7 @@ on(AgentInstanceService.method.deleteAgentInstance, (input, call) => {
     requireInstanceId(input.agentInstanceId),
     call,
   );
+  if (instance.scheduledRun) throw new ConnectError("Scheduled conversations cannot be deleted", Code.PermissionDenied);
   markDeleted(agentInstanceRef(instance));
   // The record as it stood, which is what the controller answers with: the caller
   // asked for it to go and is told what went.
@@ -968,6 +1025,9 @@ on(AgentInstanceService.method.createAgentInstanceShare, (input, call) => {
     requireInstanceId(input.agentInstanceId),
     call,
   );
+  if (instance.scheduledRun) {
+    throw new ConnectError("scheduled conversations cannot be shared", Code.PermissionDenied);
+  }
   const { share, token } = createInstanceShare(
     instance.id,
     input.permission === PbSharePermission.READ_WRITE ? "readWrite" : "readOnly",

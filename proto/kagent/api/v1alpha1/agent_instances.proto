@@ -102,6 +102,10 @@ message GetAgentInstanceRequest {
 
 message GetAgentInstanceResponse {
   AgentInstance agent_instance = 1;
+  // Whether the caller may only view this conversation.
+  bool read_only = 2;
+  // Whether a ScheduledRun owns this conversation's lifecycle.
+  bool scheduled_run = 3;
 }
 
 message ListAgentInstancesRequest {
