@@ -172,3 +172,43 @@ func TestTerminalPersistenceFailureIsRetriedFromDurableState(t *testing.T) {
 	assert.Equal(t, v1alpha3.ScheduledRunExecutionStatus_Succeeded, completed.Status)
 	assert.Equal(t, 1, gateway.sends)
 }
+
+func TestControllerRequiresBindingForExactUID(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		persistedUID string
+		wantAccepted bool
+	}{
+		{"create interrupted before binding", "", false},
+		{"binding persisted", "schedule-uid", true},
+		{"copied pending marker on replacement", "old-uid", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sr := testScheduledRun()
+			sr.UID = "schedule-uid"
+			sr.Annotations = map[string]string{v1alpha3.ScheduledRunBindingRequiredAnnotation: "true"}
+			s, store, _, _ := testScheduler(t, sr)
+			if tc.persistedUID != "" {
+				store.bindings = map[string]database.ScheduledRunBinding{tc.persistedUID: {ScheduledRunNamespace: sr.Namespace, ScheduledRunName: sr.Name, ScheduledRunUID: tc.persistedUID, BoundUserID: "alice"}}
+			}
+			key := client.ObjectKeyFromObject(sr)
+			_, err := NewController(s).Reconcile(t.Context(), ctrl.Request{NamespacedName: key})
+			require.NoError(t, err)
+			var current v1alpha3.ScheduledRun
+			require.NoError(t, s.kube.Get(t.Context(), key, &current))
+			require.Equal(t, tc.wantAccepted, meta.IsStatusConditionTrue(current.Status.Conditions, v1alpha3.ScheduledRunConditionTypeAccepted))
+			require.Contains(t, current.Annotations, v1alpha3.ScheduledRunBindingRequiredAnnotation)
+			if !tc.wantAccepted {
+				require.Empty(t, s.entries)
+				_, err = s.TriggerManualExecution(t.Context(), key)
+				require.Error(t, err)
+				require.Empty(t, store.records)
+			} else {
+				// A persisted binding is sufficient; no activation patch is needed.
+				execution, err := s.TriggerManualExecution(t.Context(), key)
+				require.NoError(t, err)
+				require.Equal(t, "alice", execution.UserID)
+			}
+		})
+	}
+}

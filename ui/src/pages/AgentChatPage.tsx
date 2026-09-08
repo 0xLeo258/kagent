@@ -529,7 +529,7 @@ export function AgentChatPage() {
           {/* The controller's own precondition, said rather than discovered. A
               suspended agent is resumable from the agents list, which is why the
               state is named rather than the page simply refusing. */}
-          {instance.data?.scheduledRun && <Alert type="info" showIcon data-testid="scheduled-conversation-notice" title={readOnly ? "Scheduled conversation, read-only" : "Scheduled conversation"} description={readOnly ? "This schedule does not allow replies or changes to its conversations." : "Replies are allowed by this schedule. Sharing, renaming and deleting its conversations are managed by the schedule."} />}
+          {instance.data?.scheduledRun && <Alert type="info" showIcon data-testid="scheduled-conversation-notice" title={readOnly ? "Scheduled conversation, read-only" : "Scheduled conversation"} description={readOnly ? "You have read-only access to this conversation. Only the user bound to its schedule can reply." : "This schedule is bound to your account, so you can reply. Sharing, renaming and deleting its conversations are managed by the schedule."} />}
           {instance.data && !readOnly && !canSend ? (
             <Alert
               type="warning"

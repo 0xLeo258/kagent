@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
@@ -12,10 +14,10 @@ import (
 	"github.com/kagent-dev/kagent/go/core/internal/service/kubecrud"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
-	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -25,6 +27,8 @@ const (
 )
 
 type store interface {
+	CreateScheduledRunBinding(context.Context, *dbpkg.ScheduledRunBinding) error
+	GetScheduledRunBinding(context.Context, string, string, string) (*dbpkg.ScheduledRunBinding, error)
 	ListScheduledRunExecutions(context.Context, string, string, string, dbpkg.ScheduledRunExecutionQuery) ([]dbpkg.ScheduledRunExecution, error)
 	GetScheduledRunExecutionByAgentInstanceID(context.Context, string) (*dbpkg.ScheduledRunExecution, error)
 }
@@ -57,30 +61,86 @@ func (s *Service) Get(ctx context.Context, ref types.NamespacedName) (*v1alpha3.
 }
 
 func (s *Service) Create(ctx context.Context, incoming *v1alpha3.ScheduledRun) (*v1alpha3.ScheduledRun, error) {
+	if incoming == nil {
+		return nil, serviceerrors.NewInvalidArgument("ScheduledRun resource is required", nil)
+	}
+	session, ok := auth.AuthSessionFrom(ctx)
+	if !ok || session.Principal().User.ID == "" {
+		return nil, serviceerrors.NewUnauthenticated("Authentication is required", nil)
+	}
+	principal := session.Principal()
+	if principal.Agent.ID != "" || principal.User.ID == auth.ScheduledRunUserID {
+		return nil, serviceerrors.NewPermissionDenied("ScheduledRun creation requires a user identity", nil)
+	}
 	// Only user-owned metadata is accepted on create. In particular, do not persist
 	// a copied UID, resourceVersion or controller-written status from a GET response.
 	resource := &v1alpha3.ScheduledRun{
 		TypeMeta:   metav1.TypeMeta{APIVersion: v1alpha3.GroupVersion.String(), Kind: resourceKind},
-		ObjectMeta: metav1.ObjectMeta{Name: incoming.Name, Namespace: incoming.Namespace, Labels: incoming.Labels, Annotations: incoming.Annotations},
+		ObjectMeta: metav1.ObjectMeta{Name: incoming.Name, Namespace: incoming.Namespace, Labels: incoming.Labels, Annotations: maps.Clone(incoming.Annotations)},
 		Spec:       *incoming.Spec.DeepCopy(),
 	}
-	return s.crud.Create(ctx, resource)
-}
-
-func (s *Service) Update(ctx context.Context, incoming *v1alpha3.ScheduledRun) (*v1alpha3.ScheduledRun, error) {
-	existing, err := s.crud.GetForUpdate(ctx, types.NamespacedName{Namespace: incoming.Namespace, Name: incoming.Name})
+	if resource.Annotations == nil {
+		resource.Annotations = make(map[string]string)
+	}
+	// Kubernetes and PostgreSQL cannot commit atomically. Block dispatch until
+	// the actual UID returned by Create has a durable binding. Never infer the
+	// creator from metadata, including this required-binding marker.
+	resource.Annotations[v1alpha3.ScheduledRunBindingRequiredAnnotation] = "true"
+	created, err := s.crud.Create(ctx, resource)
 	if err != nil {
 		return nil, err
 	}
-	if !sameTarget(existing.Spec.TargetRef, incoming.Spec.TargetRef) || existing.Spec.HarnessRef != incoming.Spec.HarnessRef {
-		return nil, serviceerrors.NewInvalidArgument("ScheduledRun targetRef and harnessRef are immutable", nil)
+	if err := s.store.CreateScheduledRunBinding(ctx, &dbpkg.ScheduledRunBinding{
+		ScheduledRunNamespace: created.Namespace, ScheduledRunName: created.Name,
+		ScheduledRunUID: string(created.UID), BoundUserID: principal.User.ID,
+	}); err != nil {
+		// A failed binding leaves the resource blocked from execution.
+		return nil, serviceerrors.NewInternal("Failed to bind ScheduledRun; delete the pending resource and retry creation", err)
 	}
-	// Update the live resource's spec instead of applying a GET response. This
-	// preserves resourceVersion, managedFields and status, and reports concurrent
-	// modifications instead of taking ownership of unrelated fields.
-	existing.Spec = *incoming.Spec.DeepCopy()
-	if err := s.kube.Update(ctx, existing); err != nil {
+	return created, nil
+}
+
+// BoundUserID returns the server-owned binding for an already authorized
+// resource. CRD fields and annotations cannot establish or change this binding.
+func (s *Service) BoundUserID(ctx context.Context, resource *v1alpha3.ScheduledRun) (string, error) {
+	binding, err := s.store.GetScheduledRunBinding(ctx, resource.Namespace, resource.Name, string(resource.UID))
+	if errors.Is(err, dbpkg.ErrNotFound) {
+		return "", nil
+	}
+	if err != nil {
+		return "", serviceerrors.NewInternal("Failed to get ScheduledRun user binding", err)
+	}
+	return binding.BoundUserID, nil
+}
+
+func (s *Service) Update(ctx context.Context, incoming *v1alpha3.ScheduledRun) (*v1alpha3.ScheduledRun, error) {
+	if incoming == nil || incoming.UID == "" || incoming.Generation < 1 {
+		return nil, serviceerrors.NewInvalidArgument("ScheduledRun metadata.uid and metadata.generation from the read resource are required", nil)
+	}
+	ref := types.NamespacedName{Namespace: incoming.Namespace, Name: incoming.Name}
+	var updated *v1alpha3.ScheduledRun
+	// Generation fences spec edits without rejecting a draft whenever the
+	// controller writes status. The live resourceVersion makes each write atomic;
+	// a retry must recheck the original UID and generation before applying it.
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		existing, err := s.crud.GetForUpdate(ctx, ref)
+		if err != nil {
+			return err
+		}
+		if existing.UID != incoming.UID || existing.Generation != incoming.Generation {
+			return serviceerrors.NewAborted("ScheduledRun was replaced or its spec changed; reload before editing", nil)
+		}
+		existing.Spec = *incoming.Spec.DeepCopy()
+		if err := s.kube.Update(ctx, existing); err != nil {
+			return err
+		}
+		updated = existing
+		return nil
+	})
+	if err != nil {
 		switch {
+		case serviceerrors.CodeOf(err) != "":
+			return nil, err
 		case apierrors.IsConflict(err):
 			return nil, serviceerrors.NewAborted("ScheduledRun changed during update; retry with its current state", err)
 		case apierrors.IsInvalid(err):
@@ -91,17 +151,7 @@ func (s *Service) Update(ctx context.Context, incoming *v1alpha3.ScheduledRun) (
 			return nil, serviceerrors.NewInternal("Failed to update ScheduledRun", err)
 		}
 	}
-	return existing, nil
-}
-
-func sameTarget(left, right corev1.TypedLocalObjectReference) bool {
-	if left.Kind != right.Kind || left.Name != right.Name {
-		return false
-	}
-	if left.APIGroup == nil || right.APIGroup == nil {
-		return left.APIGroup == nil && right.APIGroup == nil
-	}
-	return *left.APIGroup == *right.APIGroup
+	return updated, nil
 }
 
 func (s *Service) Delete(ctx context.Context, ref types.NamespacedName) error {

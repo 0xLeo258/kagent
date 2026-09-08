@@ -475,7 +475,7 @@ func (c *Client) ListAgentInstances(ctx context.Context, query AgentInstanceQuer
 		return nil, fmt.Errorf("marshal AgentInstance label selector: %w", err)
 	}
 	rows, err := c.q.ListAgentInstances(ctx, dbgen.ListAgentInstancesParams{
-		UserID: query.UserID, AllUsers: query.AllUsers, ExcludeUserID: query.ExcludeUserID,
+		UserID: query.UserID, AllUsers: query.AllUsers, ExcludeScheduledRuns: query.ExcludeScheduledRuns,
 		AfterID: query.AfterID, MatchLabels: labels,
 		AgentTemplate: query.AgentTemplate.GetName(), AgentTemplateNamespace: query.AgentTemplate.GetNamespace(), Harness: query.Harness.GetName(), HarnessNamespace: query.Harness.GetNamespace(),
 		PageSize: int32(query.Limit),

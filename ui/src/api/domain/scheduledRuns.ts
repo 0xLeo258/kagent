@@ -8,7 +8,6 @@ export interface ScheduledRunSpec {
   harnessRef: { name: string };
   prompt: string;
   suspended?: boolean;
-  allowSessionInteraction?: boolean;
   executionTimeout?: string;
   recentExecutionsLimit?: number;
 }
@@ -33,6 +32,8 @@ export interface ScheduledRunResource {
 export interface ScheduledRun {
   namespace: string;
   name: string;
+  /** Read-only binding resolved by the server; absent for unbound schedules. */
+  boundUserId?: string;
   resource: ScheduledRunResource;
 }
 
@@ -81,12 +82,12 @@ export function scheduledRunStatus(run: ScheduledRun): {
   return { label: "Active", color: "success" };
 }
 
-/** A write contains authored fields only, never managedFields, UID or status. */
+/** An update carries the spec's original identity and generation for conflict detection. */
 export function scheduledRunWrite(
   run: ScheduledRun,
   spec = run.resource.spec,
 ): ScheduledRunWrite {
-  const { labels, annotations } = run.resource.metadata;
+  const { labels, annotations, uid, generation } = run.resource.metadata;
   return {
     namespace: run.namespace,
     name: run.name,
@@ -96,6 +97,8 @@ export function scheduledRunWrite(
         name: run.name,
         labels,
         annotations,
+        uid,
+        generation,
       },
       spec,
     },

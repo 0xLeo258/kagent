@@ -37,6 +37,10 @@ const DefaultScheduledRunExecutionTimeout = 15 * time.Minute
 // retained in an execution status message.
 const MaxScheduledRunStatusMessageLength = 32768
 
+// ScheduledRunBindingRequiredAnnotation marks API-created schedules that must
+// have a database user binding before they can execute. It conveys no identity.
+const ScheduledRunBindingRequiredAnnotation = "kagent.dev/scheduled-run-binding-required"
+
 const (
 	// ScheduledRunTargetAPIGroup is the API group for built-in ScheduledRun targets.
 	ScheduledRunTargetAPIGroup = "kagent.dev"
@@ -123,12 +127,6 @@ type ScheduledRunSpec struct {
 	// +optional
 	// +kubebuilder:default=false
 	Suspended *bool `json:"suspended,omitempty"`
-
-	// AllowSessionInteraction allows users who can read this ScheduledRun to
-	// continue conversations created by it. Defaults to false.
-	// +optional
-	// +kubebuilder:default=false
-	AllowSessionInteraction *bool `json:"allowSessionInteraction,omitempty"`
 
 	// ExecutionTimeout is the maximum duration allowed for one execution, including
 	// dispatch and asynchronous task polling. Defaults to 15 minutes.

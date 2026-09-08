@@ -19,13 +19,23 @@ const (
 
 var ErrScheduledRunExecutionConflict = errors.New("ScheduledRun execution transition conflicts with its current state")
 
+// ScheduledRunBinding stores the authenticated creator separately from writable
+// Kubernetes metadata. A ScheduledRun UID can be bound to only one owner.
+type ScheduledRunBinding struct {
+	ScheduledRunNamespace string
+	ScheduledRunName      string
+	ScheduledRunUID       string
+	BoundUserID           string
+}
+
 // ScheduledRunExecution is durable execution history, independent of Kubernetes status retention.
-// Prompt and Deadline are immutable snapshots so retries do not pick up later spec edits.
+// UserID, Prompt and Deadline are immutable snapshots so retries cannot change ownership or inputs.
 type ScheduledRunExecution struct {
 	ID                    string
 	ScheduledRunNamespace string
 	ScheduledRunName      string
 	ScheduledRunUID       string
+	UserID                string
 	StartTime             time.Time
 	Deadline              time.Time
 	CompletionTime        *time.Time

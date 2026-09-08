@@ -27,6 +27,10 @@ export interface ResourceMetadata {
   /** RFC3339, from `metadata.creationTimestamp`. */
   creationTimestamp?: string;
   resourceVersion?: string;
+  /** Identifies this object across deletion and recreation of its name. */
+  uid?: string;
+  /** Version of the authored spec; status updates do not change it. */
+  generation?: number;
   labels?: Record<string, string>;
   /**
    * Where an extension form field folds its value on the way to the controller.

@@ -28,7 +28,7 @@ func (s *scheduledRunServer) ListScheduledRuns(ctx context.Context, request *api
 	}
 	response := &apiv1alpha1.ListScheduledRunsResponse{ScheduledRuns: make([]*apiv1alpha1.ScheduledRun, 0, len(items))}
 	for _, item := range items {
-		resource, err := s.encodeScheduledRun(item)
+		resource, err := s.encodeScheduledRun(ctx, item)
 		if err != nil {
 			return nil, err
 		}
@@ -42,7 +42,7 @@ func (s *scheduledRunServer) GetScheduledRun(ctx context.Context, request *apiv1
 	if err != nil {
 		return nil, err
 	}
-	resource, err := s.encodeScheduledRun(item)
+	resource, err := s.encodeScheduledRun(ctx, item)
 	if err != nil {
 		return nil, err
 	}
@@ -58,7 +58,7 @@ func (s *scheduledRunServer) CreateScheduledRun(ctx context.Context, request *ap
 	if err != nil {
 		return nil, err
 	}
-	resource, err := s.encodeScheduledRun(item)
+	resource, err := s.encodeScheduledRun(ctx, item)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (s *scheduledRunServer) UpdateScheduledRun(ctx context.Context, request *ap
 	if err != nil {
 		return nil, err
 	}
-	resource, err := s.encodeScheduledRun(item)
+	resource, err := s.encodeScheduledRun(ctx, item)
 	if err != nil {
 		return nil, err
 	}
@@ -126,12 +126,16 @@ func (s *scheduledRunServer) decodeScheduledRun(ref *apiv1alpha1.ResourceReferen
 	return &incoming, nil
 }
 
-func (s *scheduledRunServer) encodeScheduledRun(item *v1alpha3.ScheduledRun) (*apiv1alpha1.ScheduledRun, error) {
+func (s *scheduledRunServer) encodeScheduledRun(ctx context.Context, item *v1alpha3.ScheduledRun) (*apiv1alpha1.ScheduledRun, error) {
 	resource, err := structuredobject.FromGo(item, v1alpha3.GroupVersion.String(), "ScheduledRun", s.maxMessageBytes)
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to encode ScheduledRun resource", err)
 	}
-	return &apiv1alpha1.ScheduledRun{Ref: &apiv1alpha1.ResourceReference{Namespace: item.Namespace, Name: item.Name}, Resource: resource}, nil
+	boundUserID, err := s.service.BoundUserID(ctx, item)
+	if err != nil {
+		return nil, err
+	}
+	return &apiv1alpha1.ScheduledRun{BoundUserId: boundUserID, Ref: &apiv1alpha1.ResourceReference{Namespace: item.Namespace, Name: item.Name}, Resource: resource}, nil
 }
 
 func scheduledRunExecutionProto(item *dbpkg.ScheduledRunExecution) *apiv1alpha1.ScheduledRunExecution {

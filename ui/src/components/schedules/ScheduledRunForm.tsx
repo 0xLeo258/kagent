@@ -154,16 +154,15 @@ export function ScheduledRunForm({
           onChange={(value) => update("suspended", value)}
         />
       </Form.Item>
-      <Form.Item
-        label="Allow conversation interaction"
-        help="Off by default. When enabled, authorized readers can reply to conversations created by this schedule."
-      >
-        <Switch
-          aria-label="Allow conversation interaction"
-          checked={draft.allowSessionInteraction}
-          onChange={(value) => update("allowSessionInteraction", value)}
+      {!editing && (
+        <Alert
+          type="info"
+          showIcon
+          title="Conversation access"
+          description="Creating this schedule binds it to your account. Only you can reply to its conversations; other authorized readers have read-only access."
+          css={{ marginBottom: 16 }}
         />
-      </Form.Item>
+      )}
       <Form.Item
         label="Execution timeout"
         required

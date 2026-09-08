@@ -120,11 +120,19 @@ type RuntimeRevision struct {
 	AgentCard             []byte
 }
 
+type ScheduledRunBinding struct {
+	ScheduledRunUid       string
+	ScheduledRunNamespace string
+	ScheduledRunName      string
+	BoundUserID           string
+}
+
 type ScheduledRunExecution struct {
 	ID                    string
 	ScheduledRunNamespace string
 	ScheduledRunName      string
 	ScheduledRunUid       string
+	UserID                string
 	StartTime             time.Time
 	Deadline              time.Time
 	CompletionTime        *time.Time

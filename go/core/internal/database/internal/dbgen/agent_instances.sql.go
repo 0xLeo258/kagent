@@ -427,7 +427,12 @@ const listAgentInstances = `-- name: ListAgentInstances :many
 SELECT i.id, i.user_id, i.request_id, i.prepared_revision, i.state, i.labels, i.data, i.operation, i.context_id, i.source_checkpoint_id, i.history_id FROM agent_instance i
 LEFT JOIN runtime_revision r ON r.revision = i.prepared_revision
 WHERE ($1::boolean OR i.user_id = $2)
-  AND ($3::text = '' OR i.user_id <> $3)
+  AND (NOT $3::boolean OR NOT EXISTS (
+    SELECT 1 FROM scheduled_run_execution e
+    WHERE e.agent_instance_id = i.id
+      OR (e.agent_instance_id IS NULL AND e.id = i.request_id
+          AND e.user_id = i.user_id)
+  ))
   AND (NULLIF($4::text, '') IS NULL OR i.id > NULLIF($4::text, '')::uuid)
   AND i.labels @> $5::jsonb
   AND ($6::text = '' OR (r.agent_template_name = $6 AND r.namespace = $7))
@@ -439,7 +444,7 @@ LIMIT $10
 type ListAgentInstancesParams struct {
 	AllUsers               bool
 	UserID                 string
-	ExcludeUserID          string
+	ExcludeScheduledRuns   bool
 	AfterID                string
 	MatchLabels            []byte
 	AgentTemplate          string
@@ -461,7 +466,7 @@ func (q *Queries) ListAgentInstances(ctx context.Context, arg ListAgentInstances
 	rows, err := q.db.Query(ctx, listAgentInstances,
 		arg.AllUsers,
 		arg.UserID,
-		arg.ExcludeUserID,
+		arg.ExcludeScheduledRuns,
 		arg.AfterID,
 		arg.MatchLabels,
 		arg.AgentTemplate,

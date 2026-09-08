@@ -77,10 +77,30 @@ func (s *Service) Create(ctx context.Context, harness, template *apiv1alpha1.Res
 	if err := validateCreate(harness, template, requestID); err != nil {
 		return nil, err
 	}
-	creator, err := s.authorize(ctx, auth.VerbCreate, "")
+	creator, err := s.authorizeType(ctx, auth.VerbCreate, "AgentInstance", template.GetNamespace()+"/"+template.GetName())
 	if err != nil {
 		return nil, err
 	}
+	return s.create(ctx, harness, template, requestID, name, creator)
+}
+
+// CreateForOwner is the scheduler's internal creation path. Authentication stays
+// on the reserved scheduler identity; owner comes from a trusted execution snapshot.
+func (s *Service) CreateForOwner(ctx context.Context, harness, template *apiv1alpha1.ResourceReference, requestID, name, owner string) (*apiv1alpha1.AgentInstance, error) {
+	session, ok := auth.AuthSessionFrom(ctx)
+	if !ok || session.Principal().User.ID != auth.ScheduledRunUserID {
+		return nil, serviceerrors.NewPermissionDenied("Only the scheduler can create an instance for another owner", nil)
+	}
+	if owner == "" {
+		return nil, serviceerrors.NewInvalidArgument("ScheduledRun execution owner is required", nil)
+	}
+	if err := validateCreate(harness, template, requestID); err != nil {
+		return nil, err
+	}
+	return s.create(ctx, harness, template, requestID, name, owner)
+}
+
+func (s *Service) create(ctx context.Context, harness, template *apiv1alpha1.ResourceReference, requestID, name, creator string) (*apiv1alpha1.AgentInstance, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
 		return nil, serviceerrors.NewInternal("Failed to generate AgentInstance identifier", err)
@@ -164,7 +184,7 @@ func (s *Service) List(ctx context.Context, request ListRequest) (ListResult, er
 		return ListResult{}, serviceerrors.NewInvalidArgument("page token is invalid", err)
 	}
 	instances, err := s.store.ListAgentInstances(ctx, database.AgentInstanceQuery{
-		UserID: userID, AllUsers: request.AllCreators, ExcludeUserID: auth.ScheduledRunUserID,
+		UserID: userID, AllUsers: request.AllCreators, ExcludeScheduledRuns: true,
 		MatchLabels:   request.MatchLabels,
 		AgentTemplate: request.AgentTemplate, Harness: request.Harness,
 		AfterID: afterID, Limit: pageSize + 1,

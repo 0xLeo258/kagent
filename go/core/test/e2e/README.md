@@ -44,10 +44,10 @@ input continuation, and cancellation.
 `mocks/` contains the deterministic LLM responses used by interaction tests.
 
 `TestScheduledRunInteraction` exercises schedule CRUD, manual triggering while
-paused, independent runtime executions, paginated history, conversation access
-policy, and isolation after deleting and recreating a schedule. It requires the
+paused, independent runtime executions, paginated history, bound-owner continuation, read-only
+access for other readers, and isolation after deleting and recreating a schedule. It requires the
 ScheduledRun CRD and controller from the same build. Like production schedule
-deletion, its cleanup retains the completed scheduler-owned AgentInstances and
+deletion, its cleanup retains the completed scheduled AgentInstances and
 execution records until the clean test installation is discarded.
 
 For local interaction debugging, start any retained response fixture from the

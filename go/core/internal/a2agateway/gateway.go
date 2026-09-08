@@ -275,15 +275,79 @@ func (g *Gateway) CancelTask(ctx context.Context, req *a2atype.CancelTaskRequest
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", instance.GetId())
 		return nil, a2atype.NewError(a2atype.ErrInternalError, "failed to connect to AgentInstance runtime")
 	}
-	release := g.coordinator.RuntimeCall(instance.GetId())
-	defer release()
-	defer client.Destroy()
-	canceled, err := client.CancelTask(ctx, req)
+	var run *taskRun
+	defer func() {
+		if run == nil {
+			_ = client.Destroy()
+		}
+	}()
+	var canceled *a2atype.Task
+	var reader eventqueue.Reader
+	err = func() error {
+		release := g.coordinator.RuntimeCall(instance.GetId())
+		defer release()
+		var err error
+		canceled, err = client.CancelTask(ctx, req)
+		if err != nil {
+			return err
+		}
+		if canceled == nil {
+			return a2atype.NewError(a2atype.ErrInternalError, "runtime returned no canceled task")
+		}
+		if err := validateTaskInfo(canceled, task); err != nil {
+			return a2atype.NewError(a2atype.ErrInternalError, err.Error())
+		}
+		if existing, exists := g.taskRun(instance.GetId(), task.ID); exists {
+			if existing.getError() == nil {
+				return nil
+			}
+			// A failed subscription can still be closing its reader and client.
+			// It has no more events to persist; wait until it releases ownership.
+			select {
+			case <-existing.done:
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+		// A completed ingester may already have persisted the outcome before
+		// cancellation acquired its runtime lock. Do not quiesce it a second time.
+		latest, err := g.store.GetAgentInstanceTask(ctx, instance.GetId(), string(task.ID))
+		if err != nil {
+			return g.storeError(ctx, err)
+		}
+		if latest.Status.State.Terminal() {
+			canceled = latest
+			return nil
+		}
+		// A recovery subscription can fail while cancellation still succeeds.
+		// Claim the same registry ownership used by streaming calls so only one
+		// ingester persists the result and performs terminal side effects.
+		run, reader, err = g.startTaskRun(ctx, instance, latest, nil, client, func(yield func(a2atype.Event, error) bool) {
+			yield(canceled, nil)
+		})
+		if errors.Is(err, errTaskRunExists) {
+			return nil
+		}
+		if err != nil {
+			return g.storeError(ctx, err)
+		}
+		return nil
+	}()
 	if err != nil {
 		return nil, err
 	}
-	if err := validateTaskInfo(canceled, task); err != nil {
-		return nil, a2atype.NewError(a2atype.ErrInternalError, err.Error())
+	if run != nil {
+		// The runtime lock must be released before waiting: terminal ingestion
+		// needs its exclusive side to quiesce and persist the cancellation.
+		_ = reader.Close()
+		select {
+		case <-run.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		if err := run.getError(); err != nil {
+			return nil, err
+		}
 	}
 	return canceled, nil
 }
@@ -339,22 +403,24 @@ func (g *Gateway) SubscribeToTask(ctx context.Context, req *a2atype.SubscribeToT
 		return func(yield func(a2atype.Event, error) bool) { yield(task, nil) }
 	}
 	if run, ok := g.taskRun(instance.GetId(), task.ID); ok {
-		return run.observe(ctx, task)
+		return run.observe(ctx, run.getLast())
 	}
 	client, err := g.dialer.Dial(ctx, instance)
 	if err != nil {
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", instance.GetId())
 		return errorEvents(a2atype.NewError(a2atype.ErrInternalError, "failed to connect to AgentInstance runtime"))
 	}
-	run, reader, err := g.startTaskRun(ctx, instance, task, nil, client, client.SubscribeToTask(context.WithoutCancel(ctx), req))
+	run, reader, err := g.startTaskRun(ctx, instance, task, nil, client, subscribeToRuntimeTask(context.WithoutCancel(ctx), client, task, req))
 	if err != nil {
 		_ = client.Destroy()
 		if run, ok := g.taskRun(instance.GetId(), task.ID); ok {
-			return run.observe(ctx, task)
+			return run.observe(ctx, run.getLast())
 		}
 		return errorEvents(g.storeError(ctx, err))
 	}
-	return run.observeReader(ctx, task, reader)
+	// A new ingester must publish a persisted runtime event before reporting that
+	// recovery succeeded. The public snapshot may predate a controller restart.
+	return run.observeReader(ctx, nil, reader)
 }
 
 func (g *Gateway) SendStreamingMessage(ctx context.Context, req *a2atype.SendMessageRequest) iter.Seq2[a2atype.Event, error] {
@@ -371,7 +437,7 @@ func (g *Gateway) SendStreamingMessage(ctx context.Context, req *a2atype.SendMes
 		logging.FromContext(ctx).ErrorContext(ctx, "failed to connect to agent instance runtime", "error", err, "instance_id", attempt.instance.GetId())
 		return errorEvents(a2atype.NewError(a2atype.ErrInternalError, "failed to connect to AgentInstance runtime"))
 	}
-	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, attempt.previous, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req))
+	run, reader, err := g.startTaskRun(ctx, attempt.instance, attempt.task, attempt, client, client.SendStreamingMessage(context.WithoutCancel(ctx), req))
 	if err != nil {
 		_ = client.Destroy()
 		g.failAttempt(ctx, attempt)

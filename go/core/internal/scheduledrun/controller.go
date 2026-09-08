@@ -2,6 +2,7 @@ package scheduledrun
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -25,6 +26,7 @@ const (
 	acceptedReason         = "ScheduleAccepted"
 	invalidSpecReason      = "InvalidSpec"
 	targetNotFoundReason   = "TargetNotFound"
+	bindingPendingReason   = "BindingPending"
 )
 
 // Controller validates references and keeps cron registration and the durable
@@ -59,7 +61,9 @@ func (c *Controller) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 		Type: v1alpha3.ScheduledRunConditionTypeAccepted, Status: metav1.ConditionTrue,
 		Reason: acceptedReason, Message: "ScheduledRun is accepted", ObservedGeneration: sr.Generation,
 	}
-	if err := ValidateSpec(sr.Spec); err != nil {
+
+	parsed, err := parseSchedule(sr.Spec)
+	if err != nil {
 		condition.Status, condition.Reason, condition.Message = metav1.ConditionFalse, invalidSpecReason, err.Error()
 	} else if err := validateTargets(ctx, c.scheduler.kube, &sr); err != nil {
 		if !apierrors.IsNotFound(err) {
@@ -69,14 +73,11 @@ func (c *Controller) Reconcile(ctx context.Context, request ctrl.Request) (ctrl.
 	}
 	sr.Status.NextExecutionTime = nil
 	if condition.Status == metav1.ConditionTrue {
-		if err := c.scheduler.UpdateSchedule(ctx, &sr); err != nil {
+		if err := c.scheduler.updateSchedule(ctx, &sr, parsed); errors.Is(err, errBindingPending) {
+			condition.Status, condition.Reason, condition.Message = metav1.ConditionFalse, bindingPendingReason, err.Error()
+		} else if err != nil {
 			return ctrl.Result{}, err
-		}
-		if !isSuspended(&sr) {
-			parsed, err := parseSchedule(sr.Spec)
-			if err != nil {
-				return ctrl.Result{}, err
-			}
+		} else if !isSuspended(&sr) {
 			next := metav1.NewTime(parsed.Next(time.Now()))
 			sr.Status.NextExecutionTime = &next
 		}
@@ -115,7 +116,7 @@ func validateTargets(ctx context.Context, kube client.Client, sr *v1alpha3.Sched
 
 func (c *Controller) SetupWithManager(manager ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(manager).
-		For(&v1alpha3.ScheduledRun{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		For(&v1alpha3.ScheduledRun{}, builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, predicate.AnnotationChangedPredicate{}))).
 		Watches(&v1alpha3.AgentTemplate{}, handler.EnqueueRequestsFromMapFunc(c.schedulesForTarget), builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		Watches(&v1alpha3.Harness{}, handler.EnqueueRequestsFromMapFunc(c.schedulesForTarget), builder.WithPredicates(predicate.GenerationChangedPredicate{})).
 		WithOptions(controllerconfig.Options{NeedLeaderElection: new(true)}).

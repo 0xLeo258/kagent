@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	_ "time/tzdata" // ScheduledRuns need IANA time zones in runtime images without tzdata.
 
 	"github.com/kagent-dev/kagent/go/core/pkg/app"
 )

@@ -12,11 +12,43 @@ import (
 	dbgen "github.com/kagent-dev/kagent/go/core/internal/database/internal/dbgen"
 )
 
+func (c *Client) CreateScheduledRunBinding(ctx context.Context, binding *ScheduledRunBinding) error {
+	_, err := c.q.CreateScheduledRunBinding(ctx, dbgen.CreateScheduledRunBindingParams{
+		ScheduledRunNamespace: binding.ScheduledRunNamespace, ScheduledRunName: binding.ScheduledRunName,
+		ScheduledRunUid: binding.ScheduledRunUID, BoundUserID: binding.BoundUserID,
+	})
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("failed to create ScheduledRun binding %s: %w", binding.ScheduledRunUID, err)
+	}
+	existing, err := c.GetScheduledRunBinding(ctx, binding.ScheduledRunNamespace, binding.ScheduledRunName, binding.ScheduledRunUID)
+	if errors.Is(err, ErrNotFound) || (err == nil && existing.BoundUserID != binding.BoundUserID) {
+		return ErrIdempotencyConflict
+	}
+	return err
+}
+
+func (c *Client) GetScheduledRunBinding(ctx context.Context, namespace, name, uid string) (*ScheduledRunBinding, error) {
+	row, err := c.q.GetScheduledRunBinding(ctx, dbgen.GetScheduledRunBindingParams{
+		ScheduledRunNamespace: namespace, ScheduledRunName: name, ScheduledRunUid: uid,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get ScheduledRun binding %s: %w", uid, notFoundOr(err))
+	}
+	return &ScheduledRunBinding{
+		ScheduledRunNamespace: row.ScheduledRunNamespace, ScheduledRunName: row.ScheduledRunName,
+		ScheduledRunUID: row.ScheduledRunUid, BoundUserID: row.BoundUserID,
+	}, nil
+}
+
 func (c *Client) CreateScheduledRunExecution(ctx context.Context, execution *ScheduledRunExecution) (*ScheduledRunExecution, bool, error) {
 	row, err := c.q.CreateScheduledRunExecution(ctx, dbgen.CreateScheduledRunExecutionParams{
 		ID: execution.ID, ScheduledRunNamespace: execution.ScheduledRunNamespace,
 		ScheduledRunName: execution.ScheduledRunName, ScheduledRunUid: execution.ScheduledRunUID,
 		StartTime: execution.StartTime, Deadline: execution.Deadline, Trigger: string(execution.Trigger), Prompt: execution.Prompt,
+		UserID: execution.UserID,
 	})
 	if err == nil {
 		return toScheduledRunExecution(row), true, nil
@@ -37,6 +69,7 @@ func (c *Client) CreateScheduledRunExecution(ctx context.Context, execution *Sch
 func sameExecutionRequest(left, right *ScheduledRunExecution) bool {
 	return left.ScheduledRunNamespace == right.ScheduledRunNamespace && left.ScheduledRunName == right.ScheduledRunName &&
 		left.ScheduledRunUID == right.ScheduledRunUID && left.Prompt == right.Prompt && left.Trigger == right.Trigger &&
+		left.UserID == right.UserID &&
 		left.StartTime.Truncate(time.Microsecond).Equal(right.StartTime.Truncate(time.Microsecond)) &&
 		left.Deadline.Truncate(time.Microsecond).Equal(right.Deadline.Truncate(time.Microsecond))
 }
@@ -57,6 +90,7 @@ func (c *Client) UpdateScheduledRunExecution(ctx context.Context, execution *Sch
 	affected, err := c.q.UpdateScheduledRunExecution(ctx, dbgen.UpdateScheduledRunExecutionParams{
 		ID: execution.ID, AgentInstanceID: instanceID, TaskID: taskID, Status: string(execution.Status),
 		Phase: string(execution.Phase), StatusMessage: execution.StatusMessage, CompletionTime: execution.CompletionTime,
+		UserID: execution.UserID,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to update ScheduledRun execution %s: %w", execution.ID, err)
@@ -77,7 +111,7 @@ func (c *Client) UpdateScheduledRunExecution(ctx context.Context, execution *Sch
 }
 
 func sameExecutionOutcome(left, right *ScheduledRunExecution) bool {
-	if left.Phase != right.Phase || left.Status != right.Status || left.AgentInstanceID != right.AgentInstanceID ||
+	if left.UserID != right.UserID || left.Phase != right.Phase || left.Status != right.Status || left.AgentInstanceID != right.AgentInstanceID ||
 		left.TaskID != right.TaskID || left.StatusMessage != right.StatusMessage {
 		return false
 	}
@@ -150,6 +184,7 @@ func toScheduledRunExecution(row dbgen.ScheduledRunExecution) *ScheduledRunExecu
 	execution := &ScheduledRunExecution{
 		ID: row.ID, ScheduledRunNamespace: row.ScheduledRunNamespace, ScheduledRunName: row.ScheduledRunName,
 		ScheduledRunUID: row.ScheduledRunUid, StartTime: row.StartTime, Deadline: row.Deadline,
+		UserID:         row.UserID,
 		CompletionTime: row.CompletionTime, Trigger: v1alpha3.ScheduledRunExecutionTrigger(row.Trigger),
 		Status: v1alpha3.ScheduledRunExecutionStatus(row.Status), StatusMessage: row.StatusMessage,
 		Prompt: row.Prompt, Phase: ScheduledRunExecutionPhase(row.Phase), CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,

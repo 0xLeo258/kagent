@@ -148,7 +148,7 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 	// changes type OIDs and breaks existing pool connections.
 	_, err := sharedDB.Exec(context.Background(), `
 		TRUNCATE TABLE
-			tool, toolserver, memory, scheduled_run_execution,
+			tool, toolserver, memory, scheduled_run_execution, scheduled_run_binding,
 			agent_instance_share,
 			agent_instance, a2a_context, agent_template_harness_pair, runtime_revision
 		RESTART IDENTITY CASCADE

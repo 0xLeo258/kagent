@@ -34,7 +34,7 @@ func (s *Scheduler) runExecution(ctx context.Context, execution *database.Schedu
 			// Create reserves its instance before provisioning. A lost response or
 			// failed phase write must not leave that reservation unlinked in history.
 			lookupCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-			instance, err := s.store.GetAgentInstanceByRequestID(lookupCtx, SystemUserID, execution.ID)
+			instance, err := s.store.GetAgentInstanceByRequestID(lookupCtx, execution.UserID, execution.ID)
 			cancel()
 			if err != nil && !errors.Is(err, database.ErrNotFound) {
 				return fmt.Errorf("failed to recover reserved instance for execution %s: %w", execution.ID, err)
@@ -46,10 +46,10 @@ func (s *Scheduler) runExecution(ctx context.Context, execution *database.Schedu
 			return s.complete(ctx, execution, v1alpha3.ScheduledRunExecutionStatus_TimedOut, "executionTimeout expired before instance creation completed")
 		}
 		createCtx, cancel := context.WithDeadline(systemContext(ctx), execution.Deadline)
-		instance, err := s.instances.Create(createCtx,
+		instance, err := s.instances.CreateForOwner(createCtx,
 			&apiv1alpha1.ResourceReference{Namespace: sr.Namespace, Name: sr.Spec.HarnessRef.Name},
 			&apiv1alpha1.ResourceReference{Namespace: sr.Namespace, Name: sr.Spec.TargetRef.Name},
-			execution.ID, sr.Name)
+			execution.ID, sr.Name, execution.UserID)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("failed to create instance for execution %s: %w", execution.ID, err)
@@ -171,10 +171,12 @@ func (s *Scheduler) findExecutionTask(ctx context.Context, execution *database.S
 }
 
 func (s *Scheduler) pollOutcome(ctx context.Context, execution *database.ScheduledRunExecution) error {
-	attached := false
 	for {
-		// Recovery gets one real lookup even after the original deadline. Passing
-		// an already-expired context would misclassify an offline completion.
+		// GetTask reads the public database. Reattach first so a new gateway can
+		// persist the runtime's state even after the execution deadline elapsed.
+		// Rechecking the subscription also recovers an ingester lost to a transient
+		// stream error; an existing ingester is reused without another runtime call.
+		attachErr := s.attachTaskRun(ctx, execution)
 		lookupCtx, cancel := context.WithTimeout(gatewayContext(ctx, execution), writeTimeout)
 		task, err := s.gateway.GetTask(lookupCtx, &a2atype.GetTaskRequest{ID: a2atype.TaskID(execution.TaskID)})
 		cancel()
@@ -189,16 +191,16 @@ func (s *Scheduler) pollOutcome(ctx context.Context, execution *database.Schedul
 		remaining := time.Until(execution.Deadline)
 		if remaining <= 0 {
 			message := "task did not reach a terminal state before executionTimeout"
-			if err != nil {
-				message += "; last task lookup failed: " + err.Error()
+			if lookupErr := errors.Join(attachErr, err); lookupErr != nil {
+				message += "; last task recovery failed: " + lookupErr.Error()
 			}
 			return s.complete(ctx, execution, v1alpha3.ScheduledRunExecutionStatus_TimedOut, message)
 		}
-		if !attached {
-			if err := s.attachTaskRun(ctx, execution); err != nil {
-				return err
-			}
-			attached = true
+		if attachErr != nil {
+			return attachErr
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read scheduled task %s: %w", execution.TaskID, err)
 		}
 		timer := time.NewTimer(min(recoveryInterval, remaining))
 		select {
@@ -261,7 +263,7 @@ func systemContext(ctx context.Context) context.Context {
 
 func gatewayContext(ctx context.Context, execution *database.ScheduledRunExecution) context.Context {
 	ctx = systemContext(ctx)
-	ctx = auth.ShareContextTo(ctx, &auth.ShareContext{AgentInstanceID: execution.AgentInstanceID, UserID: SystemUserID})
+	ctx = auth.ShareContextTo(ctx, &auth.ShareContext{AgentInstanceID: execution.AgentInstanceID, UserID: execution.UserID})
 	return metadata.NewIncomingContext(ctx, metadata.Pairs(
 		apia2a.AgentInstanceIDHeader, execution.AgentInstanceID,
 	))

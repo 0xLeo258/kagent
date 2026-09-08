@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
 	dbpkg "github.com/kagent-dev/kagent/go/core/internal/database"
-	runs "github.com/kagent-dev/kagent/go/core/internal/scheduledrun"
 	"github.com/kagent-dev/kagent/go/core/internal/service/serviceerrors"
 	"github.com/kagent-dev/kagent/go/core/pkg/auth"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -46,9 +45,12 @@ func (s *Service) ResolveInstanceAccess(ctx context.Context, instanceID string) 
 	if string(run.UID) != execution.ScheduledRunUID || !run.DeletionTimestamp.IsZero() {
 		return nil, serviceerrors.NewNotFound("ScheduledRun no longer owns this conversation", nil)
 	}
+	userID := execution.UserID
+	// Agent callbacks carry a delegated user ID, not a human caller identity.
+	principal := session.Principal()
 	return &auth.ShareContext{
 		AgentInstanceID: instanceID,
-		UserID:          runs.SystemUserID,
-		ReadOnly:        run.Spec.AllowSessionInteraction == nil || !*run.Spec.AllowSessionInteraction,
+		UserID:          userID,
+		ReadOnly:        userID == auth.ScheduledRunUserID || principal.Agent.ID != "" || principal.User.ID != userID,
 	}, nil
 }

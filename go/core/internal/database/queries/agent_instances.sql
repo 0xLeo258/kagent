@@ -49,7 +49,12 @@ SELECT * FROM agent_instance WHERE id = $1 AND user_id = $2;
 SELECT i.* FROM agent_instance i
 LEFT JOIN runtime_revision r ON r.revision = i.prepared_revision
 WHERE (sqlc.arg(all_users)::boolean OR i.user_id = sqlc.arg(user_id))
-  AND (sqlc.arg(exclude_user_id)::text = '' OR i.user_id <> sqlc.arg(exclude_user_id))
+  AND (NOT sqlc.arg(exclude_scheduled_runs)::boolean OR NOT EXISTS (
+    SELECT 1 FROM scheduled_run_execution e
+    WHERE e.agent_instance_id = i.id
+      OR (e.agent_instance_id IS NULL AND e.id = i.request_id
+          AND e.user_id = i.user_id)
+  ))
   AND (NULLIF(sqlc.arg(after_id)::text, '') IS NULL OR i.id > NULLIF(sqlc.arg(after_id)::text, '')::uuid)
   AND i.labels @> sqlc.arg(match_labels)::jsonb
   AND (sqlc.arg(agent_template)::text = '' OR (r.agent_template_name = sqlc.arg(agent_template) AND r.namespace = sqlc.arg(agent_template_namespace)))

@@ -12,13 +12,44 @@ import (
 	"github.com/google/uuid"
 )
 
+const createScheduledRunBinding = `-- name: CreateScheduledRunBinding :one
+INSERT INTO scheduled_run_binding (scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, bound_user_id)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (scheduled_run_uid) DO NOTHING
+RETURNING scheduled_run_uid, scheduled_run_namespace, scheduled_run_name, bound_user_id
+`
+
+type CreateScheduledRunBindingParams struct {
+	ScheduledRunNamespace string
+	ScheduledRunName      string
+	ScheduledRunUid       string
+	BoundUserID           string
+}
+
+func (q *Queries) CreateScheduledRunBinding(ctx context.Context, arg CreateScheduledRunBindingParams) (ScheduledRunBinding, error) {
+	row := q.db.QueryRow(ctx, createScheduledRunBinding,
+		arg.ScheduledRunNamespace,
+		arg.ScheduledRunName,
+		arg.ScheduledRunUid,
+		arg.BoundUserID,
+	)
+	var i ScheduledRunBinding
+	err := row.Scan(
+		&i.ScheduledRunUid,
+		&i.ScheduledRunNamespace,
+		&i.ScheduledRunName,
+		&i.BoundUserID,
+	)
+	return i, err
+}
+
 const createScheduledRunExecution = `-- name: CreateScheduledRunExecution :one
 INSERT INTO scheduled_run_execution (
     id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid,
-    start_time, deadline, trigger, prompt, phase, status
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'Creating', 'InProgress')
+    start_time, deadline, trigger, prompt, user_id, phase, status
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'Creating', 'InProgress')
 ON CONFLICT (id) DO NOTHING
-RETURNING id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at
+RETURNING id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, user_id, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at
 `
 
 type CreateScheduledRunExecutionParams struct {
@@ -30,6 +61,7 @@ type CreateScheduledRunExecutionParams struct {
 	Deadline              time.Time
 	Trigger               string
 	Prompt                string
+	UserID                string
 }
 
 func (q *Queries) CreateScheduledRunExecution(ctx context.Context, arg CreateScheduledRunExecutionParams) (ScheduledRunExecution, error) {
@@ -42,6 +74,7 @@ func (q *Queries) CreateScheduledRunExecution(ctx context.Context, arg CreateSch
 		arg.Deadline,
 		arg.Trigger,
 		arg.Prompt,
+		arg.UserID,
 	)
 	var i ScheduledRunExecution
 	err := row.Scan(
@@ -49,6 +82,7 @@ func (q *Queries) CreateScheduledRunExecution(ctx context.Context, arg CreateSch
 		&i.ScheduledRunNamespace,
 		&i.ScheduledRunName,
 		&i.ScheduledRunUid,
+		&i.UserID,
 		&i.StartTime,
 		&i.Deadline,
 		&i.CompletionTime,
@@ -65,8 +99,31 @@ func (q *Queries) CreateScheduledRunExecution(ctx context.Context, arg CreateSch
 	return i, err
 }
 
+const getScheduledRunBinding = `-- name: GetScheduledRunBinding :one
+SELECT scheduled_run_uid, scheduled_run_namespace, scheduled_run_name, bound_user_id FROM scheduled_run_binding
+WHERE scheduled_run_namespace = $1 AND scheduled_run_name = $2 AND scheduled_run_uid = $3
+`
+
+type GetScheduledRunBindingParams struct {
+	ScheduledRunNamespace string
+	ScheduledRunName      string
+	ScheduledRunUid       string
+}
+
+func (q *Queries) GetScheduledRunBinding(ctx context.Context, arg GetScheduledRunBindingParams) (ScheduledRunBinding, error) {
+	row := q.db.QueryRow(ctx, getScheduledRunBinding, arg.ScheduledRunNamespace, arg.ScheduledRunName, arg.ScheduledRunUid)
+	var i ScheduledRunBinding
+	err := row.Scan(
+		&i.ScheduledRunUid,
+		&i.ScheduledRunNamespace,
+		&i.ScheduledRunName,
+		&i.BoundUserID,
+	)
+	return i, err
+}
+
 const getScheduledRunExecution = `-- name: GetScheduledRunExecution :one
-SELECT id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at FROM scheduled_run_execution WHERE id = $1
+SELECT id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, user_id, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at FROM scheduled_run_execution WHERE id = $1
 `
 
 func (q *Queries) GetScheduledRunExecution(ctx context.Context, id string) (ScheduledRunExecution, error) {
@@ -77,6 +134,7 @@ func (q *Queries) GetScheduledRunExecution(ctx context.Context, id string) (Sche
 		&i.ScheduledRunNamespace,
 		&i.ScheduledRunName,
 		&i.ScheduledRunUid,
+		&i.UserID,
 		&i.StartTime,
 		&i.Deadline,
 		&i.CompletionTime,
@@ -94,7 +152,12 @@ func (q *Queries) GetScheduledRunExecution(ctx context.Context, id string) (Sche
 }
 
 const getScheduledRunExecutionByAgentInstanceID = `-- name: GetScheduledRunExecutionByAgentInstanceID :one
-SELECT id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at FROM scheduled_run_execution WHERE agent_instance_id = $1
+SELECT e.id, e.scheduled_run_namespace, e.scheduled_run_name, e.scheduled_run_uid, e.user_id, e.start_time, e.deadline, e.completion_time, e.trigger, e.agent_instance_id, e.task_id, e.status, e.status_message, e.prompt, e.phase, e.created_at, e.updated_at FROM scheduled_run_execution e
+WHERE e.agent_instance_id = $1
+    OR (e.agent_instance_id IS NULL AND EXISTS (
+        SELECT 1 FROM agent_instance i WHERE i.id = $1 AND e.id = i.request_id
+            AND e.user_id = i.user_id
+    ))
 `
 
 func (q *Queries) GetScheduledRunExecutionByAgentInstanceID(ctx context.Context, agentInstanceID *uuid.UUID) (ScheduledRunExecution, error) {
@@ -105,6 +168,7 @@ func (q *Queries) GetScheduledRunExecutionByAgentInstanceID(ctx context.Context,
 		&i.ScheduledRunNamespace,
 		&i.ScheduledRunName,
 		&i.ScheduledRunUid,
+		&i.UserID,
 		&i.StartTime,
 		&i.Deadline,
 		&i.CompletionTime,
@@ -122,7 +186,7 @@ func (q *Queries) GetScheduledRunExecutionByAgentInstanceID(ctx context.Context,
 }
 
 const listInProgressScheduledRunExecutions = `-- name: ListInProgressScheduledRunExecutions :many
-SELECT id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at FROM scheduled_run_execution WHERE status = 'InProgress'
+SELECT id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, user_id, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at FROM scheduled_run_execution WHERE status = 'InProgress'
 ORDER BY start_time, id
 `
 
@@ -140,6 +204,7 @@ func (q *Queries) ListInProgressScheduledRunExecutions(ctx context.Context) ([]S
 			&i.ScheduledRunNamespace,
 			&i.ScheduledRunName,
 			&i.ScheduledRunUid,
+			&i.UserID,
 			&i.StartTime,
 			&i.Deadline,
 			&i.CompletionTime,
@@ -164,7 +229,7 @@ func (q *Queries) ListInProgressScheduledRunExecutions(ctx context.Context) ([]S
 }
 
 const listScheduledRunExecutions = `-- name: ListScheduledRunExecutions :many
-SELECT id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at FROM scheduled_run_execution
+SELECT id, scheduled_run_namespace, scheduled_run_name, scheduled_run_uid, user_id, start_time, deadline, completion_time, trigger, agent_instance_id, task_id, status, status_message, prompt, phase, created_at, updated_at FROM scheduled_run_execution
 WHERE scheduled_run_namespace = $1
     AND scheduled_run_name = $2
     AND scheduled_run_uid = $3
@@ -204,6 +269,7 @@ func (q *Queries) ListScheduledRunExecutions(ctx context.Context, arg ListSchedu
 			&i.ScheduledRunNamespace,
 			&i.ScheduledRunName,
 			&i.ScheduledRunUid,
+			&i.UserID,
 			&i.StartTime,
 			&i.Deadline,
 			&i.CompletionTime,
@@ -237,6 +303,7 @@ UPDATE scheduled_run_execution SET
     completion_time = $6,
     updated_at = NOW()
 WHERE id = $7
+    AND user_id = $8
     AND status = 'InProgress'
     AND (agent_instance_id IS NULL OR agent_instance_id = $1)
     AND (task_id IS NULL OR task_id = $2)
@@ -252,6 +319,7 @@ type UpdateScheduledRunExecutionParams struct {
 	StatusMessage   string
 	CompletionTime  *time.Time
 	ID              string
+	UserID          string
 }
 
 func (q *Queries) UpdateScheduledRunExecution(ctx context.Context, arg UpdateScheduledRunExecutionParams) (int64, error) {
@@ -263,6 +331,7 @@ func (q *Queries) UpdateScheduledRunExecution(ctx context.Context, arg UpdateSch
 		arg.StatusMessage,
 		arg.CompletionTime,
 		arg.ID,
+		arg.UserID,
 	)
 	if err != nil {
 		return 0, err

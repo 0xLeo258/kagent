@@ -10,11 +10,15 @@ import { fixtureScheduledRun } from "@/mocks/scheduledRuns";
 afterEach(() => setApiTransport(undefined));
 
 describe("scheduled run gRPC operations", () => {
-  it("writes only authored resource fields, including an explicit false", async () => {
+  it.each(["create", "update"] as const)("%s sends authored fields with update preconditions only when needed", async (operation) => {
     let seen: unknown;
     setApiTransport(
       createRouterTransport(({ service }) =>
         service(ScheduledRunService, {
+          createScheduledRun(request) {
+            seen = request;
+            return { scheduledRun: { ref: request.ref, resource: request.resource } };
+          },
           updateScheduledRun(request) {
             seen = request;
             return {
@@ -24,7 +28,7 @@ describe("scheduled run gRPC operations", () => {
         }),
       ),
     );
-    const run = fixtureScheduledRun();
+    const run = fixtureScheduledRun("daily-report", "forged-user");
     const dirtyResource = {
       ...run.resource,
       metadata: {
@@ -32,10 +36,11 @@ describe("scheduled run gRPC operations", () => {
         managedFields: [{ manager: "controller" }],
         resourceVersion: "42",
         uid: "uid",
+        generation: 7,
         annotations: { owner: "team" },
       },
     };
-    await apiClient.scheduledRuns.update({ ...run, resource: dirtyResource });
+    await apiClient.scheduledRuns[operation]({ ...run, resource: dirtyResource });
     expect(seen).toMatchObject({
       ref: { name: run.name, namespace: run.namespace },
       resource: {
@@ -47,7 +52,7 @@ describe("scheduled run gRPC operations", () => {
             namespace: run.namespace,
             annotations: { owner: "team" },
           },
-          spec: { suspended: false, allowSessionInteraction: false },
+          spec: { suspended: false },
         },
       },
     });
@@ -56,6 +61,13 @@ describe("scheduled run gRPC operations", () => {
     expect(value).not.toHaveProperty("status");
     expect(value.metadata).not.toHaveProperty("managedFields");
     expect(value.metadata).not.toHaveProperty("resourceVersion");
+    expect(seen).not.toHaveProperty("boundUserId");
+    if (operation === "update") {
+      expect(value.metadata).toMatchObject({ uid: "uid", generation: 7 });
+    } else {
+      expect(value.metadata).not.toHaveProperty("uid");
+      expect(value.metadata).not.toHaveProperty("generation");
+    }
   });
 
   it("passes opaque pagination tokens and preserves conversation and task identities", async () => {
@@ -129,7 +141,7 @@ describe("scheduled run gRPC operations", () => {
             return {
               agentInstance: {
                 id: request.agentInstanceId,
-                namespace: "kagent",
+                contextId: "schedule-context",
               },
               readOnly: request.agentInstanceId === "scheduled",
               scheduledRun: request.agentInstanceId === "scheduled",
@@ -140,7 +152,7 @@ describe("scheduled run gRPC operations", () => {
     );
     expect(
       await apiClient.agentInstances.get("scheduled"),
-    ).toMatchObject({ readOnly: true, scheduledRun: true });
+    ).toMatchObject({ readOnly: true, scheduledRun: true, contextId: "schedule-context" });
     expect(
       await apiClient.agentInstances.get("ordinary"),
     ).not.toHaveProperty("readOnly");

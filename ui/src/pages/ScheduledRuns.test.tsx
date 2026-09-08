@@ -4,7 +4,7 @@ import { ThemeProvider } from "@emotion/react";
 import { SWRConfig } from "swr";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
-import { createRouterTransport } from "@connectrpc/connect";
+import { Code, ConnectError, createRouterTransport } from "@connectrpc/connect";
 import { timestampFromDate } from "@bufbuild/protobuf/wkt";
 import { ScheduledRunService } from "@/generated/kagent/api/v1alpha1/scheduled_runs_pb";
 import { SystemService } from "@/generated/kagent/api/v1alpha1/system_pb";
@@ -12,6 +12,7 @@ import { AgentTemplateService } from "@/generated/kagent/api/v1alpha1/agent_temp
 import { setApiTransport } from "@/api/transport";
 import { themeFor } from "@/theme/theme";
 import { fixtureScheduledRun } from "@/mocks/scheduledRuns";
+import { MOCK_INSTANCE_CREATOR } from "@/mocks/fixtures";
 import { paths } from "@/router/routes";
 import { ScheduledRunsPage } from "./ScheduledRunsPage";
 import { ScheduledRunNewPage } from "./ScheduledRunNewPage";
@@ -25,16 +26,27 @@ afterEach(() => {
 });
 
 function backend() {
+  let boundUserId = "";
   let resource = fixtureScheduledRun().resource;
   const seen = {
     namespaces: [] as string[],
     writes: [] as ScheduledRunResource[],
     tokens: [] as string[],
     triggers: 0,
+    reads: 0,
+    currentResource: () => resource,
+    changeSpec: (spec: Partial<ScheduledRunResource["spec"]>) => {
+      resource = {
+        ...resource,
+        metadata: { ...resource.metadata, generation: (resource.metadata.generation ?? 1) + 1 },
+        spec: { ...resource.spec, ...spec },
+      };
+    },
   };
   const message = () => ({
     ref: { namespace: "kagent", name: "daily-report" },
     resource: wrap("ScheduledRun", resource),
+    boundUserId,
   });
   setApiTransport(
     createRouterTransport(({ service }) => {
@@ -53,15 +65,26 @@ function backend() {
             scheduledRuns: request.namespace === "kagent" ? [message()] : [],
           };
         },
-        getScheduledRun: () => ({ scheduledRun: message() }),
+        getScheduledRun: () => {
+          seen.reads++;
+          return { scheduledRun: message() };
+        },
         createScheduledRun(request) {
+          boundUserId = MOCK_INSTANCE_CREATOR;
           resource = request.resource?.value as unknown as ScheduledRunResource;
           seen.writes.push(resource);
           return { scheduledRun: { ...message(), ref: request.ref } };
         },
         updateScheduledRun(request) {
-          resource = request.resource?.value as unknown as ScheduledRunResource;
-          seen.writes.push(resource);
+          const incoming = request.resource?.value as unknown as ScheduledRunResource;
+          seen.writes.push(incoming);
+          if (incoming.metadata.uid !== resource.metadata.uid || incoming.metadata.generation !== resource.metadata.generation) {
+            throw new ConnectError("ScheduledRun changed during update; retry with its current state", Code.Aborted);
+          }
+          resource = {
+            ...incoming,
+            metadata: { ...incoming.metadata, generation: (resource.metadata.generation ?? 1) + 1 },
+          };
           return { scheduledRun: message() };
         },
         listScheduledRunExecutions(request) {
@@ -127,6 +150,46 @@ function show(entry: string) {
 }
 
 describe("schedule pages through the gRPC client", () => {
+  it("refuses a pause based on an older spec instead of reverting another reader's changes", async () => {
+    const seen = backend();
+    show("/schedules/kagent/daily-report");
+    const pause = await screen.findByRole("button", { name: "Suspend" });
+    seen.changeSpec({ prompt: "Another reader's prompt" });
+
+    await userEvent.click(pause);
+
+    expect(await screen.findByText(/ScheduledRun changed during update/)).toBeInTheDocument();
+    expect(seen.writes[0].metadata).toMatchObject({ uid: "mock-schedule-daily-report", generation: 1 });
+    expect(seen.currentResource().spec).toMatchObject({ prompt: "Another reader's prompt", suspended: false });
+  });
+
+  it("keeps the edit's original version when background data is refreshed", async () => {
+    const seen = backend();
+    show("/schedules/kagent/daily-report");
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Edit" }));
+    const prompt = screen.getByRole("textbox", { name: "Prompt" });
+    await user.clear(prompt);
+    await user.type(prompt, "My edited prompt");
+    seen.changeSpec({ schedule: "0 10 * * *" });
+    const reads = seen.reads;
+    await user.click(screen.getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(seen.reads).toBeGreaterThan(reads));
+    await user.click(screen.getByRole("button", { name: "Save schedule" }));
+
+    expect(await screen.findByText(/ScheduledRun changed during update/)).toBeInTheDocument();
+    expect(seen.writes[0].metadata).toMatchObject({ uid: "mock-schedule-daily-report", generation: 1 });
+    expect(seen.currentResource().spec.schedule).toBe("0 10 * * *");
+    expect(prompt).toHaveValue("My edited prompt");
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    await user.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("textbox", { name: "Schedule" })).toHaveValue("0 10 * * *");
+    await user.click(screen.getByRole("button", { name: "Save schedule" }));
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Save schedule" })).not.toBeInTheDocument());
+    expect(seen.writes[1].metadata.generation).toBe(2);
+  });
+
   it("lists known namespaces explicitly and links to schedule details", async () => {
     const seen = backend();
     show("/schedules");
@@ -135,9 +198,11 @@ describe("schedule pages through the gRPC client", () => {
     expect(seen.namespaces.sort()).toEqual(["kagent", "platform"]);
     await userEvent.click(link);
     expect(await screen.findByText("Execution history")).toBeInTheDocument();
+    expect(screen.getByText("Unbound")).toBeInTheDocument();
+    expect(screen.getByText("Read-only for everyone")).toBeInTheDocument();
   });
 
-  it("creates a complete schedule with read-only conversations by default", async () => {
+  it("creates a complete schedule and displays its server-assigned binding", async () => {
     const seen = backend();
     show(
       "/schedules/new?namespace=kagent&agentTemplate=k8s-agent-7f3a91c&harness=k8s-agent",
@@ -163,11 +228,13 @@ describe("schedule pages through the gRPC client", () => {
     expect(seen.writes[0].spec).toMatchObject({
       targetRef: { kind: "AgentTemplate", name: "k8s-agent-7f3a91c" },
       harnessRef: { name: "k8s-agent" },
-      allowSessionInteraction: false,
       executionTimeout: "15m",
       prompt: "Report cluster health",
     });
+    expect(seen.writes[0].spec).not.toHaveProperty("allowSessionInteraction");
     expect(await screen.findByText("Execution history")).toBeInTheDocument();
+    expect(screen.getByText(MOCK_INSTANCE_CREATOR)).toBeInTheDocument();
+    expect(screen.getByText("Bound user only")).toBeInTheDocument();
   });
 
   it("pauses, edits, triggers and reads older executions without losing conversation links", async () => {
@@ -182,15 +249,11 @@ describe("schedule pages through the gRPC client", () => {
     const prompt = screen.getByRole("textbox", { name: "Prompt" });
     await user.clear(prompt);
     await user.type(prompt, "Changed report");
-    await user.click(
-      screen.getByRole("switch", { name: "Allow conversation interaction" }),
-    );
     await user.click(screen.getByRole("button", { name: "Save schedule" }));
     await waitFor(() =>
       expect(seen.writes.at(-1)?.spec).toMatchObject({
         prompt: "Changed report",
         suspended: true,
-        allowSessionInteraction: true,
       }),
     );
     await user.click(
@@ -211,8 +274,8 @@ describe("schedule pages through the gRPC client", () => {
         .getAllByRole("link", { name: "Open conversation" })
         .map((link) => link.getAttribute("href")),
     ).toEqual([
-      "/agents/kagent/latest-instance/chat",
-      "/agents/kagent/older-instance/chat",
+      "/agents/latest-instance/chat",
+      "/agents/older-instance/chat",
     ]);
   });
 });

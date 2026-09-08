@@ -17,7 +17,6 @@ export interface ScheduledRunDraft {
   timeZone: string;
   prompt: string;
   suspended: boolean;
-  allowSessionInteraction: boolean;
   executionTimeout: string;
   recentExecutionsLimit: number;
 }
@@ -34,7 +33,6 @@ export function emptyScheduledRunDraft(
     timeZone: "UTC",
     prompt: "",
     suspended: false,
-    allowSessionInteraction: false,
     executionTimeout: "15m",
     recentExecutionsLimit: 10,
   };
@@ -51,7 +49,6 @@ export function scheduledRunDraftFrom(run: ScheduledRun): ScheduledRunDraft {
     timeZone: spec.timeZone ?? "UTC",
     prompt: spec.prompt,
     suspended: spec.suspended ?? false,
-    allowSessionInteraction: spec.allowSessionInteraction ?? false,
     executionTimeout: spec.executionTimeout ?? "15m",
     recentExecutionsLimit: spec.recentExecutionsLimit ?? 10,
   };
@@ -120,7 +117,6 @@ export function scheduledRunPayloadFrom(
     timeZone: draft.timeZone.trim() || "UTC",
     prompt: draft.prompt,
     suspended: draft.suspended,
-    allowSessionInteraction: draft.allowSessionInteraction,
     executionTimeout: draft.executionTimeout.trim(),
     recentExecutionsLimit: draft.recentExecutionsLimit,
   };

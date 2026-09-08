@@ -80,7 +80,7 @@ import { AgentTemplateService } from "@/generated/kagent/api/v1alpha1/agent_temp
 import { ModelService } from "@/generated/kagent/api/v1alpha1/models_pb";
 import { ScheduledRunService } from "@/generated/kagent/api/v1alpha1/scheduled_runs_pb";
 import type { ScheduledRunResource } from "@/api/domain/scheduledRuns";
-import { allScheduledRuns, findScheduledRun, saveScheduledRun, removeScheduledRun, scheduledExecutions, recordScheduledExecution } from "./scheduledRuns";
+import { allScheduledRuns, findScheduledRun, saveScheduledRun, removeScheduledRun, scheduledExecutions, recordScheduledExecution, scheduledRunForInstance, scheduledRunMayReply } from "./scheduledRuns";
 import { ToolService } from "@/generated/kagent/api/v1alpha1/tools_pb";
 import { PromptTemplateService } from "@/generated/kagent/api/v1alpha1/prompts_pb";
 import { SystemService } from "@/generated/kagent/api/v1alpha1/system_pb";
@@ -575,8 +575,8 @@ function scheduledRunFor(ref: { namespace: string; name: string } | undefined, c
   return run;
 }
 
-function scheduledRunMessage(run: { namespace: string; name: string; resource: ScheduledRunResource }) {
-  return { ref: { namespace: run.namespace, name: run.name }, resource: structured("ScheduledRun", run.resource) };
+function scheduledRunMessage(run: { namespace: string; name: string; resource: ScheduledRunResource; boundUserId?: string }) {
+  return { ref: { namespace: run.namespace, name: run.name }, resource: structured("ScheduledRun", run.resource), boundUserId: run.boundUserId ?? "" };
 }
 
 on(ScheduledRunService.method.listScheduledRuns, (input, call) => {
@@ -594,6 +594,12 @@ on(ScheduledRunService.method.createScheduledRun, (input) => {
 on(ScheduledRunService.method.updateScheduledRun, (input, call) => {
   const run = scheduledRunFor(input.ref, call);
   const resource = valueOf<ScheduledRunResource>(input.resource, "ScheduledRun");
+  if (!resource.metadata.uid || !Number.isInteger(resource.metadata.generation) || (resource.metadata.generation ?? 0) < 1) {
+    throw new ConnectError("ScheduledRun updates require metadata.uid and metadata.generation from a current read", Code.InvalidArgument);
+  }
+  if (resource.metadata.uid !== run.resource.metadata.uid || resource.metadata.generation !== run.resource.metadata.generation) {
+    throw new ConnectError("ScheduledRun changed during update; retry with its current state", Code.Aborted);
+  }
   if (resource.spec.targetRef.name !== run.resource.spec.targetRef.name || resource.spec.targetRef.kind !== run.resource.spec.targetRef.kind || resource.spec.targetRef.apiGroup !== run.resource.spec.targetRef.apiGroup || resource.spec.harnessRef.name !== run.resource.spec.harnessRef.name) throw new ConnectError("Agent references are immutable", Code.InvalidArgument);
   return { scheduledRun: scheduledRunMessage(saveScheduledRun(run.namespace, run.name, resource)) };
 });
@@ -796,9 +802,9 @@ function instanceFor(id: string, call: MockCall): AgentInstance {
    * and the page could claim a link works when it does not.
    */
   if (found.scheduledRun) {
-    const schedule = findScheduledRun("kagent/daily-report");
-    if (!schedule) throw notFound("ScheduledRun kagent/daily-report");
-    return { ...found, readOnly: !schedule.resource.spec.allowSessionInteraction };
+    const schedule = scheduledRunForInstance(found.id);
+    if (!schedule) throw notFound(`ScheduledRun for conversation ${id}`);
+    return { ...found, readOnly: !scheduledRunMayReply(schedule) };
   }
   if (found.creator !== MOCK_INSTANCE_CREATOR) {
     throw notFound(`AgentInstance ${id}`);

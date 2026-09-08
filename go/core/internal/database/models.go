@@ -85,9 +85,10 @@ type ActorTemplateHarness struct {
 type AgentInstanceQuery struct {
 	UserID   string
 	AllUsers bool
-	// ExcludeUserID keeps system-owned conversations out of user-facing lists.
-	ExcludeUserID string
-	MatchLabels   map[string]string
+	// ExcludeScheduledRuns keeps scheduled conversations out of ordinary lists,
+	// including instances reserved before their execution linkage is persisted.
+	ExcludeScheduledRuns bool
+	MatchLabels          map[string]string
 	// AgentTemplate and Harness name the agent whose conversations are wanted.
 	// They are matched against the (AgentTemplate, Harness) pair the instance's
 	// prepared revision was built from, not against its labels, so they select

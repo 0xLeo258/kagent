@@ -29,6 +29,7 @@ const (
 )
 
 type executionStore interface {
+	GetScheduledRunBinding(context.Context, string, string, string) (*database.ScheduledRunBinding, error)
 	CreateScheduledRunExecution(context.Context, *database.ScheduledRunExecution) (*database.ScheduledRunExecution, bool, error)
 	UpdateScheduledRunExecution(context.Context, *database.ScheduledRunExecution) error
 	GetScheduledRunExecution(context.Context, string) (*database.ScheduledRunExecution, error)
@@ -38,7 +39,7 @@ type executionStore interface {
 }
 
 type instanceCreator interface {
-	Create(context.Context, *apiv1alpha1.ResourceReference, *apiv1alpha1.ResourceReference, string, string) (*apiv1alpha1.AgentInstance, error)
+	CreateForOwner(context.Context, *apiv1alpha1.ResourceReference, *apiv1alpha1.ResourceReference, string, string, string) (*apiv1alpha1.AgentInstance, error)
 }
 
 type taskGateway interface {
@@ -134,10 +135,10 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	}
 }
 
-// UpdateSchedule converges cron registration without resetting unchanged entries.
-func (s *Scheduler) UpdateSchedule(ctx context.Context, sr *v1alpha3.ScheduledRun) error {
-	parsed, err := parseSchedule(sr.Spec)
-	if err != nil {
+// updateSchedule converges cron registration without resetting unchanged entries.
+func (s *Scheduler) updateSchedule(ctx context.Context, sr *v1alpha3.ScheduledRun, parsed cron.Schedule) error {
+	if _, err := s.resolveUserID(ctx, sr); err != nil {
+		s.RemoveSchedule(client.ObjectKeyFromObject(sr))
 		return err
 	}
 	key := client.ObjectKeyFromObject(sr)
@@ -199,10 +200,15 @@ func (s *Scheduler) reserve(ctx context.Context, key types.NamespacedName, uid t
 	if (uid != "" && sr.UID != uid) || !sr.DeletionTimestamp.IsZero() || (!manual && isSuspended(&sr)) {
 		return nil, nil
 	}
-	if err := ValidateSpec(sr.Spec); err != nil {
+
+	if _, err := parseSchedule(sr.Spec); err != nil {
 		return nil, err
 	}
 	if err := validateTargets(ctx, s.kube, &sr); err != nil {
+		return nil, err
+	}
+	owner, err := s.resolveUserID(ctx, &sr)
+	if err != nil {
 		return nil, err
 	}
 	id, err := uuid.NewV7()
@@ -216,6 +222,7 @@ func (s *Scheduler) reserve(ctx context.Context, key types.NamespacedName, uid t
 	start := time.Now().UTC()
 	record, _, err := s.store.CreateScheduledRunExecution(ctx, &database.ScheduledRunExecution{
 		ID: id.String(), ScheduledRunNamespace: sr.Namespace, ScheduledRunName: sr.Name, ScheduledRunUID: string(sr.UID),
+		UserID:    owner,
 		StartTime: start, Deadline: start.Add(executionTimeout(&sr)), Trigger: trigger, Prompt: sr.Spec.Prompt,
 		Status: v1alpha3.ScheduledRunExecutionStatus_InProgress, Phase: database.ScheduledRunExecutionPhaseCreating,
 	})
@@ -315,4 +322,22 @@ func (c cronLog) Info(message string, values ...any) {
 
 func (c cronLog) Error(err error, message string, values ...any) {
 	logging.FromContext(c.ctx).ErrorContext(c.ctx, "cron scheduler job failed", "event", message, "details", values, "error", err)
+}
+
+var errBindingPending = errors.New("ScheduledRun user binding is pending")
+
+// The marker prevents an API create interrupted before its database write from
+// executing as the system user. Only the binding for this UID supplies identity.
+func (s *Scheduler) resolveUserID(ctx context.Context, sr *v1alpha3.ScheduledRun) (string, error) {
+	binding, err := s.store.GetScheduledRunBinding(ctx, sr.Namespace, sr.Name, string(sr.UID))
+	if errors.Is(err, database.ErrNotFound) {
+		if _, required := sr.Annotations[v1alpha3.ScheduledRunBindingRequiredAnnotation]; required {
+			return "", errBindingPending
+		}
+		return SystemUserID, nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve ScheduledRun user: %w", err)
+	}
+	return binding.BoundUserID, nil
 }

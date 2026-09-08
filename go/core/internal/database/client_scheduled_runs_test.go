@@ -13,10 +13,84 @@ import (
 
 func pendingScheduledExecution(id, uid string, start time.Time) *ScheduledRunExecution {
 	return &ScheduledRunExecution{
-		ID: id, ScheduledRunNamespace: "team-a", ScheduledRunName: "nightly", ScheduledRunUID: uid,
+		ID: id, ScheduledRunNamespace: "team-a", ScheduledRunName: "nightly", ScheduledRunUID: uid, UserID: auth.ScheduledRunUserID,
 		StartTime: start, Deadline: start.Add(time.Hour), Prompt: "Check cluster health", Trigger: v1alpha3.ScheduledRunExecutionTrigger_Manual,
 		Phase: ScheduledRunExecutionPhaseCreating, Status: v1alpha3.ScheduledRunExecutionStatus_InProgress,
 	}
+}
+
+func TestScheduledRunBindingIsImmutableAndScopedToUID(t *testing.T) {
+	client := NewClient(setupTestDB(t))
+	binding := &ScheduledRunBinding{
+		ScheduledRunNamespace: "team-a", ScheduledRunName: "nightly", ScheduledRunUID: uuid.NewString(), BoundUserID: "alice",
+	}
+	_, err := client.GetScheduledRunBinding(t.Context(), binding.ScheduledRunNamespace, binding.ScheduledRunName, binding.ScheduledRunUID)
+	require.ErrorIs(t, err, ErrNotFound)
+	require.NoError(t, client.CreateScheduledRunBinding(t.Context(), binding))
+	require.NoError(t, client.CreateScheduledRunBinding(t.Context(), binding), "retry preserves the same owner")
+	for _, mutate := range []func(*ScheduledRunBinding){
+		func(b *ScheduledRunBinding) { b.BoundUserID = "bob" },
+		func(b *ScheduledRunBinding) { b.ScheduledRunNamespace = "other-team" },
+		func(b *ScheduledRunBinding) { b.ScheduledRunName = "different" },
+	} {
+		conflict := *binding
+		mutate(&conflict)
+		require.ErrorIs(t, client.CreateScheduledRunBinding(t.Context(), &conflict), ErrIdempotencyConflict)
+	}
+	stored, err := client.GetScheduledRunBinding(t.Context(), "team-a", "nightly", binding.ScheduledRunUID)
+	require.NoError(t, err)
+	require.Equal(t, binding, stored)
+	_, err = client.GetScheduledRunBinding(t.Context(), "other-team", "nightly", binding.ScheduledRunUID)
+	require.ErrorIs(t, err, ErrNotFound)
+	replacement := *binding
+	replacement.ScheduledRunUID, replacement.BoundUserID = uuid.NewString(), "bob"
+	require.NoError(t, client.CreateScheduledRunBinding(t.Context(), &replacement))
+	empty := replacement
+	empty.ScheduledRunUID, empty.BoundUserID = uuid.NewString(), ""
+	require.Error(t, client.CreateScheduledRunBinding(t.Context(), &empty))
+	empty.BoundUserID = auth.ScheduledRunUserID
+	require.Error(t, client.CreateScheduledRunBinding(t.Context(), &empty), "reserved scheduler identity cannot become a user binding")
+}
+
+func TestScheduledExecutionRequestLookupDoesNotMatchAnotherOwner(t *testing.T) {
+	client := NewClient(setupTestDB(t))
+	agentInstanceFixture(t, client, t.Context(), "team-a", "request-revision", "assistant", "kagent")
+	requestID := uuid.NewString()
+	execution := pendingScheduledExecution(requestID, uuid.NewString(), time.Now())
+	execution.UserID = "bob"
+	_, _, err := client.CreateScheduledRunExecution(t.Context(), execution)
+	require.NoError(t, err)
+	input := newAgentInstanceRequest(uuid.NewString(), "assistant", "kagent", "")
+	input.Creator = "alice"
+	instance, _, err := client.CreateAgentInstance(t.Context(), input, requestID)
+	require.NoError(t, err)
+	_, err = client.GetScheduledRunExecutionByAgentInstanceID(t.Context(), instance.GetId())
+	require.ErrorIs(t, err, ErrNotFound)
+	listed, err := client.ListAgentInstances(t.Context(), AgentInstanceQuery{UserID: "alice", ExcludeScheduledRuns: true, Limit: 10})
+	require.NoError(t, err)
+	require.Len(t, listed, 1)
+	require.Equal(t, instance.GetId(), listed[0].GetId())
+}
+
+func TestScheduledRunExecutionOwnerIsAnImmutableSnapshot(t *testing.T) {
+	client := NewClient(setupTestDB(t))
+	request := pendingScheduledExecution(uuid.NewString(), uuid.NewString(), time.Now())
+	request.UserID = "alice"
+	stored, _, err := client.CreateScheduledRunExecution(t.Context(), request)
+	require.NoError(t, err)
+	require.Equal(t, "alice", stored.UserID)
+	request.UserID = "bob"
+	_, _, err = client.CreateScheduledRunExecution(t.Context(), request)
+	require.ErrorIs(t, err, ErrIdempotencyConflict)
+	stored.UserID = "bob"
+	require.ErrorIs(t, client.UpdateScheduledRunExecution(t.Context(), stored), ErrScheduledRunExecutionConflict)
+	stored, err = client.GetScheduledRunExecution(t.Context(), request.ID)
+	require.NoError(t, err)
+	require.Equal(t, "alice", stored.UserID)
+	invalid := pendingScheduledExecution(uuid.NewString(), uuid.NewString(), time.Now())
+	invalid.UserID = ""
+	_, _, err = client.CreateScheduledRunExecution(t.Context(), invalid)
+	require.Error(t, err, "the store must reject an omitted execution owner")
 }
 
 func TestScheduledRunExecutionRecoveryAndTransitions(t *testing.T) {
@@ -112,13 +186,13 @@ func TestScheduledRunExecutionRejectsIncompletePollingTransition(t *testing.T) {
 	require.Empty(t, stored.AgentInstanceID)
 }
 
-func TestListAgentInstancesExcludesScheduledOwnerBeforePagination(t *testing.T) {
+func TestListAgentInstancesExcludesScheduledExecutionsBeforePagination(t *testing.T) {
 	client := NewClient(setupTestDB(t))
 	ctx := t.Context()
 	agentInstanceFixture(t, client, ctx, "team-a", "list-revision", "assistant", "kagent")
 	fixtures := []struct{ id, owner string }{
 		{"11111111-1111-4111-8111-111111111111", "alice"},
-		{"22222222-2222-4222-8222-222222222222", auth.ScheduledRunUserID},
+		{"22222222-2222-4222-8222-222222222222", "alice"},
 		{"33333333-3333-4333-8333-333333333333", "bob"},
 		{"44444444-4444-4444-8444-444444444444", auth.ScheduledRunUserID},
 		{"55555555-5555-4555-8555-555555555555", "alice"},
@@ -129,8 +203,21 @@ func TestListAgentInstancesExcludesScheduledOwnerBeforePagination(t *testing.T) 
 		_, created, err := client.CreateAgentInstance(ctx, instance, fixture.id)
 		require.NoError(t, err)
 		require.True(t, created)
+		if fixture.id == fixtures[1].id || fixture.id == fixtures[3].id {
+			execution := pendingScheduledExecution(fixture.id, uuid.NewString(), time.Now())
+			execution.UserID = fixture.owner
+			stored, _, err := client.CreateScheduledRunExecution(ctx, execution)
+			require.NoError(t, err)
+			if fixture.id == fixtures[3].id {
+				stored.AgentInstanceID, stored.Phase = fixture.id, ScheduledRunExecutionPhaseDispatching
+				require.NoError(t, client.UpdateScheduledRunExecution(ctx, stored))
+			}
+			matched, err := client.GetScheduledRunExecutionByAgentInstanceID(ctx, fixture.id)
+			require.NoError(t, err, "both reserved and linked scheduled instances are discoverable")
+			require.Equal(t, fixture.owner, matched.UserID)
+		}
 	}
-	query := AgentInstanceQuery{AllUsers: true, ExcludeUserID: auth.ScheduledRunUserID, Limit: 2}
+	query := AgentInstanceQuery{AllUsers: true, ExcludeScheduledRuns: true, Limit: 2}
 	first, err := client.ListAgentInstances(ctx, query)
 	require.NoError(t, err)
 	require.Len(t, first, 2)

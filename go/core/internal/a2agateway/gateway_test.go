@@ -860,7 +860,7 @@ func TestGatewaySubscriptionRecoversTaskRun(t *testing.T) {
 		}
 		events = append(events, event)
 	}
-	if len(events) != 2 || workflow.quiesceCalls != 1 || len(store.stored) != 1 || !runtime.destroyed {
+	if len(events) != 1 || workflow.quiesceCalls != 1 || len(store.stored) != 1 || !runtime.destroyed {
 		t.Fatalf("events = %d, quiescence calls = %d, stored events = %d, runtime destroyed = %v", len(events), workflow.quiesceCalls, len(store.stored), runtime.destroyed)
 	}
 }

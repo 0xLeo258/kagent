@@ -13,6 +13,8 @@ import (
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 )
 
+var errTaskRunExists = errors.New("task event ingester already exists")
+
 // taskRun is the single owner of task event persistence and runtime quiescence.
 // Public streams only observe the events it publishes.
 type taskRun struct {
@@ -38,11 +40,16 @@ func (g *Gateway) taskRun(instanceID string, taskID a2atype.TaskID) (*taskRun, b
 	return run.(*taskRun), true
 }
 
-func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentInstance, task, previous *a2atype.Task, client *a2aclient.Client, events iter.Seq2[a2atype.Event, error]) (*taskRun, eventqueue.Reader, error) {
+func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, attempt *preparedSend, client *a2aclient.Client, events iter.Seq2[a2atype.Event, error]) (*taskRun, eventqueue.Reader, error) {
 	key := taskRunKey(instance.GetId(), task.ID)
 	run := &taskRun{gateway: g, key: key, queueID: a2atype.TaskID(key), done: make(chan struct{})}
+	if attempt != nil {
+		// A live send has already persisted its submitted task. A recovery has
+		// no current state until it receives and persists a runtime event.
+		run.last = task
+	}
 	if _, loaded := g.runs.LoadOrStore(key, run); loaded {
-		return nil, nil, fmt.Errorf("task event ingester already exists")
+		return nil, nil, errTaskRunExists
 	}
 	writer, err := g.events.CreateWriter(ctx, run.queueID)
 	if err != nil {
@@ -56,22 +63,26 @@ func (g *Gateway) startTaskRun(ctx context.Context, instance *apiv1alpha1.AgentI
 		g.runs.Delete(key)
 		return nil, nil, fmt.Errorf("create task event reader: %w", err)
 	}
-	go run.ingest(context.WithoutCancel(ctx), instance, task, previous, client, writer, events)
+	go run.ingest(context.WithoutCancel(ctx), instance, task, attempt, client, writer, events)
 	return run, reader, nil
 }
 
-func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstance, task, previous *a2atype.Task, client *a2aclient.Client, writer eventqueue.Writer, events iter.Seq2[a2atype.Event, error]) {
+func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstance, task *a2atype.Task, attempt *preparedSend, client *a2aclient.Client, writer eventqueue.Writer, events iter.Seq2[a2atype.Event, error]) {
 	defer func() {
 		_ = writer.Close()
 		_ = client.Destroy()
-		close(r.done)
 		_ = r.gateway.events.Destroy(ctx, r.queueID)
 		r.gateway.runs.CompareAndDelete(r.key, r)
+		close(r.done)
 	}()
 
 	for event, eventErr := range events {
 		if eventErr != nil {
-			r.gateway.failAttempt(ctx, &preparedSend{instance: instance, task: task, previous: previous})
+			// A failed subscription does not establish the outcome of an already
+			// dispatched task. Leave it recoverable after a transport outage.
+			if attempt != nil {
+				r.gateway.failAttempt(ctx, &preparedSend{instance: instance, task: task, previous: attempt.previous})
+			}
 			r.setError(eventErr)
 			return
 		}
@@ -97,7 +108,9 @@ func (r *taskRun) ingest(ctx context.Context, instance *apiv1alpha1.AgentInstanc
 			r.setError(r.gateway.storeError(ctx, fmt.Errorf("publish task event: %w", err)))
 			return
 		}
-		r.setLast(event)
+		// A reconnect needs the accumulated task, not an artifact delta that
+		// would be applied twice or without the preceding chunks.
+		r.setLast(updated)
 		task = updated
 		if isQuiescent(task.Status.State) {
 			return

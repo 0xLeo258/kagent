@@ -30,11 +30,12 @@ import (
 type scheduledMemoryStore struct {
 	mu    sync.Mutex
 	calls []string
+	owner string
 }
 
 func (s *scheduledMemoryStore) record(ctx context.Context, userID, method string) error {
 	session, ok := auth.AuthSessionFrom(ctx)
-	if !ok || session.Principal().User.ID != auth.ScheduledRunUserID || userID != auth.ScheduledRunUserID {
+	if !ok || session.Principal().User.ID != s.owner || userID != s.owner {
 		return fmt.Errorf("memory callback lost scheduled execution identity")
 	}
 	s.mu.Lock()
@@ -64,12 +65,26 @@ func (s *scheduledMemoryStore) DeleteAgentMemory(ctx context.Context, _, userID 
 }
 
 func TestScheduledRunMemoryCallbacksPreserveReservedIdentityGuard(t *testing.T) {
-	store := &scheduledMemoryStore{}
+	for _, owner := range []string{auth.ScheduledRunUserID, "alice"} {
+		for _, provider := range []auth.AuthProvider{&authimpl.UnsecureAuthenticator{}, authimpl.NewProxyAuthenticator("sub")} {
+			t.Run(fmt.Sprintf("%s/%T", owner, provider), func(t *testing.T) {
+				testScheduledRunMemoryCallbacks(t, owner, provider)
+			})
+		}
+	}
+}
+
+type scheduledMemoryToken string
+
+func (t scheduledMemoryToken) GetToken() string { return string(t) }
+
+func testScheduledRunMemoryCallbacks(t *testing.T, owner string, provider auth.AuthProvider) {
+	store := &scheduledMemoryStore{owner: owner}
 	authorizer := &authimpl.NoopAuthorizer{}
 	listener := bufconn.Listen(DefaultMaxMessageSize)
 	server, err := New(Config{
 		Listener: listener, Registerer: prometheus.NewRegistry(),
-		Authenticator:        &authimpl.UnsecureAuthenticator{},
+		Authenticator:        provider,
 		SystemService:        testSystemService(),
 		MemoryService:        memoryservice.NewService(store),
 		AgentInstanceService: agentinstance.NewService(nil, authorizer, nil),
@@ -82,14 +97,19 @@ func TestScheduledRunMemoryCallbacksPreserveReservedIdentityGuard(t *testing.T) 
 	go func() { done <- server.Start(ctx) }()
 	t.Cleanup(func() { cancel(); require.NoError(t, <-done) })
 	dial := grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() })
-	callback, err := controllerclient.New(controllerclient.Config{APIURL: "http://controller.test", AgentName: "scheduled-agent", DialOptions: []grpc.DialOption{dial}})
+	// The runtime token subject differs from the execution owner. Memory
+	// callbacks must use the explicit ADK identity even in proxy auth mode.
+	callback, err := controllerclient.New(controllerclient.Config{
+		APIURL: "http://controller.test", AgentName: "scheduled-agent", DialOptions: []grpc.DialOption{dial},
+		TokenProvider: scheduledMemoryToken("eyJhbGciOiJub25lIn0.eyJzdWIiOiJib2IifQ.signature"),
+	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, callback.Close()) })
 	// Use the same identity propagation as the GoADK A2A executor and memory client.
-	callCtx, callCancel := callback.CallContext(adkauth.WithUserID(t.Context(), auth.ScheduledRunUserID), "")
+	callCtx, callCancel := callback.CallContext(adkauth.WithUserID(t.Context(), owner), "")
 	defer callCancel()
 	client := callback.MemoryService()
-	input := &apiv1alpha1.SessionMemoryInput{AgentName: "scheduled-agent", UserId: auth.ScheduledRunUserID, Content: "scheduled result", Vector: make([]float32, memoryservice.VectorDimension)}
+	input := &apiv1alpha1.SessionMemoryInput{AgentName: "scheduled-agent", UserId: owner, Content: "scheduled result", Vector: make([]float32, memoryservice.VectorDimension)}
 	_, err = client.AddSession(callCtx, &apiv1alpha1.MemoryServiceAddSessionRequest{Memory: input})
 	require.NoError(t, err)
 	batch, err := client.AddSessionBatch(callCtx, &apiv1alpha1.MemoryServiceAddSessionBatchRequest{Items: []*apiv1alpha1.SessionMemoryInput{input}})
@@ -104,6 +124,9 @@ func TestScheduledRunMemoryCallbacksPreserveReservedIdentityGuard(t *testing.T) 
 	store.mu.Lock()
 	require.Equal(t, []string{"add", "batch", "search", "list", "delete"}, store.calls)
 	store.mu.Unlock()
+	if owner != auth.ScheduledRunUserID {
+		return
+	}
 
 	connection, err := grpc.NewClient("passthrough:///bufnet", grpc.WithTransportCredentials(insecure.NewCredentials()), dial)
 	require.NoError(t, err)

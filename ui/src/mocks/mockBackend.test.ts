@@ -21,7 +21,8 @@ import type { OperationId, OperationInput } from "@/api/operations";
 import { setApiTransport } from "@/api/transport";
 import { mockTransport } from "./transport";
 import { MOCK_INSTANCE_CREATOR } from "./fixtures";
-import { fixtureScheduledRun } from "./scheduledRuns";
+import { fixtureScheduledRun, SCHEDULED_CONVERSATIONS } from "./scheduledRuns";
+import { MockChatClient } from "@/api/chat/mockChatClient";
 
 beforeAll(() => setApiTransport(mockTransport));
 afterAll(() => setApiTransport(undefined));
@@ -209,6 +210,44 @@ function run(id: OperationId): Promise<unknown> {
 }
 
 describe("the fixture backend", () => {
+  it.each(SCHEDULED_CONVERSATIONS)("limits $name conversation replies to its bound user", async ({ id, name }) => {
+    const instance = await invoke("agentInstances.get", { id });
+    const mayReply = name === "owned-report";
+    expect(instance.readOnly === true).toBe(!mayReply);
+
+    let firstEventType: string | undefined;
+    for await (const event of new MockChatClient().send({
+      conversation: { id },
+      text: "Continue the report",
+      signal: new AbortController().signal,
+    })) {
+      firstEventType = event.type;
+      break;
+    }
+    expect(firstEventType).toBe(mayReply ? "status" : "error");
+  });
+
+  it("preserves the caller binding and rejects stale updates across edits and recreation", async () => {
+    const original = await invoke("scheduledRuns.create", fixtureScheduledRun("concurrent-schedule", "forged-user"));
+    expect(original.boundUserId).toBe(MOCK_INSTANCE_CREATOR);
+    const edit = {
+      ...original,
+      boundUserId: "forged-user",
+      resource: { ...original.resource, spec: { ...original.resource.spec, prompt: "Updated prompt" } },
+    };
+    const updated = await invoke("scheduledRuns.update", edit);
+    expect(updated.boundUserId).toBe(MOCK_INSTANCE_CREATOR);
+    expect(updated.resource.metadata.generation).toBe(2);
+    await expect(invoke("scheduledRuns.update", original)).rejects.toThrow(/changed during update/);
+    expect((await invoke("scheduledRuns.get", original)).resource.spec.prompt).toBe("Updated prompt");
+
+    await invoke("scheduledRuns.delete", original);
+    const replacement = await invoke("scheduledRuns.create", fixtureScheduledRun("concurrent-schedule"));
+    expect(replacement.resource.metadata.uid).not.toBe(original.resource.metadata.uid);
+    expect(replacement.resource.metadata.generation).toBe(1);
+    await expect(invoke("scheduledRuns.update", original)).rejects.toThrow(/changed during update/);
+  });
+
   /*
    * Concurrently, because every call waits out the scenario's delay: serially this
    * would be one delay per operation for no extra coverage.

@@ -3,9 +3,11 @@ package grpcserver
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	apiv1alpha1 "github.com/kagent-dev/kagent/go/api/gen/kagent/api/v1alpha1"
 	"github.com/kagent-dev/kagent/go/api/structuredobject"
 	"github.com/kagent-dev/kagent/go/api/v1alpha3"
@@ -25,9 +27,34 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrlclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 )
 
-type grpcExecutionStore struct{ dbpkg.Client }
+type grpcExecutionStore struct {
+	dbpkg.Client
+	mu       sync.Mutex
+	bindings map[string]dbpkg.ScheduledRunBinding
+}
+
+func (s *grpcExecutionStore) CreateScheduledRunBinding(_ context.Context, binding *dbpkg.ScheduledRunBinding) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.bindings == nil {
+		s.bindings = make(map[string]dbpkg.ScheduledRunBinding)
+	}
+	s.bindings[binding.ScheduledRunUID] = *binding
+	return nil
+}
+
+func (s *grpcExecutionStore) GetScheduledRunBinding(_ context.Context, namespace, name, uid string) (*dbpkg.ScheduledRunBinding, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	binding, ok := s.bindings[uid]
+	if !ok || binding.ScheduledRunNamespace != namespace || binding.ScheduledRunName != name {
+		return nil, dbpkg.ErrNotFound
+	}
+	return &binding, nil
+}
 
 func (s *grpcExecutionStore) ListScheduledRunExecutions(_ context.Context, namespace, name, uid string, _ dbpkg.ScheduledRunExecutionQuery) ([]dbpkg.ScheduledRunExecution, error) {
 	return []dbpkg.ScheduledRunExecution{{ID: "run-1", ScheduledRunNamespace: namespace, ScheduledRunName: name, ScheduledRunUID: uid, StartTime: time.Date(2026, 9, 7, 0, 0, 0, 0, time.UTC), AgentInstanceID: "01993019-e480-7412-96fb-f239f1f000c1", Status: v1alpha3.ScheduledRunExecutionStatus_InProgress}}, nil
@@ -43,7 +70,18 @@ func newScheduledRunConnection(t *testing.T, objects ...ctrlclient.Object) apiv1
 	t.Helper()
 	scheme := runtime.NewScheme()
 	require.NoError(t, v1alpha3.AddToScheme(scheme))
-	kube := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha3.ScheduledRun{}).WithObjects(objects...).Build()
+	kube := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1alpha3.ScheduledRun{}).WithObjects(objects...).WithInterceptorFuncs(interceptor.Funcs{
+		Create: func(ctx context.Context, c ctrlclient.WithWatch, obj ctrlclient.Object, opts ...ctrlclient.CreateOption) error {
+			obj.SetUID(types.UID(uuid.NewString()))
+			obj.SetGeneration(1)
+			return c.Create(ctx, obj, opts...)
+		},
+	}).Build()
+	return newScheduledRunConnectionWithKube(t, kube)
+}
+
+func newScheduledRunConnectionWithKube(t *testing.T, kube ctrlclient.Client) apiv1alpha1.ScheduledRunServiceClient {
+	t.Helper()
 	listener := bufconn.Listen(DefaultMaxMessageSize)
 	server, err := New(Config{Listener: listener, Registerer: prometheus.NewRegistry(), Authenticator: &authimpl.UnsecureAuthenticator{}, SystemService: testSystemService(), ScheduledRunService: scheduledrunservice.NewService(kube, &authimpl.NoopAuthorizer{}, &grpcExecutionStore{}, &grpcExecutionTrigger{})})
 	require.NoError(t, err)
@@ -59,7 +97,7 @@ func newScheduledRunConnection(t *testing.T, objects ...ctrlclient.Object) apiv1
 
 func grpcScheduledRun() *v1alpha3.ScheduledRun {
 	group := v1alpha3.GroupVersion.Group
-	return &v1alpha3.ScheduledRun{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "nightly", UID: "owner", ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "gitops", Operation: metav1.ManagedFieldsOperationApply, APIVersion: v1alpha3.GroupVersion.String(), FieldsType: "FieldsV1", FieldsV1: metav1.NewFieldsV1(`{"f:spec":{}}`)}}}, Spec: v1alpha3.ScheduledRunSpec{Schedule: "0 * * * *", Prompt: "Check health", TargetRef: corev1.TypedLocalObjectReference{APIGroup: &group, Kind: "AgentTemplate", Name: "template"}, HarnessRef: corev1.LocalObjectReference{Name: "harness"}}, Status: v1alpha3.ScheduledRunStatus{ObservedGeneration: 7}}
+	return &v1alpha3.ScheduledRun{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "nightly", UID: "owner", Generation: 1, ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "gitops", Operation: metav1.ManagedFieldsOperationApply, APIVersion: v1alpha3.GroupVersion.String(), FieldsType: "FieldsV1", FieldsV1: metav1.NewFieldsV1(`{"f:spec":{}}`)}}}, Spec: v1alpha3.ScheduledRunSpec{Schedule: "0 * * * *", Prompt: "Check health", TargetRef: corev1.TypedLocalObjectReference{APIGroup: &group, Kind: "AgentTemplate", Name: "template"}, HarnessRef: corev1.LocalObjectReference{Name: "harness"}}, Status: v1alpha3.ScheduledRunStatus{ObservedGeneration: 7}}
 }
 
 func TestScheduledRunGRPCGetUpdateRoundTrip(t *testing.T) {
@@ -70,6 +108,7 @@ func TestScheduledRunGRPCGetUpdateRoundTrip(t *testing.T) {
 	fetched, err := client.GetScheduledRun(ctx, &apiv1alpha1.GetScheduledRunRequest{Ref: ref})
 	require.NoError(t, err)
 	var resource v1alpha3.ScheduledRun
+	require.Empty(t, fetched.GetScheduledRun().GetBoundUserId(), "direct Kubernetes resources have no user binding")
 	require.NoError(t, structuredobject.ToGo(fetched.GetScheduledRun().GetResource(), "ScheduledRun", &resource, DefaultMaxMessageSize))
 	resource.Spec.Suspended = new(true)
 	resource.Status.ObservedGeneration = 1000
@@ -149,15 +188,18 @@ func TestScheduledRunGRPCCreateDropsServerMetadata(t *testing.T) {
 	ref := &apiv1alpha1.ResourceReference{Namespace: resource.Namespace, Name: resource.Name}
 	created, err := client.CreateScheduledRun(t.Context(), &apiv1alpha1.CreateScheduledRunRequest{Ref: ref, Resource: wire})
 	require.NoError(t, err)
+	require.Equal(t, "admin@kagent.dev", created.GetScheduledRun().GetBoundUserId())
 	var persisted v1alpha3.ScheduledRun
 	require.NoError(t, structuredobject.ToGo(created.GetScheduledRun().GetResource(), "ScheduledRun", &persisted, DefaultMaxMessageSize))
 	require.NotEqual(t, resource.UID, persisted.UID)
 	require.Zero(t, persisted.Status.ObservedGeneration)
 	require.Equal(t, resource.Labels, persisted.Labels)
 	require.Equal(t, resource.Spec.Prompt, persisted.Spec.Prompt)
+	require.Contains(t, persisted.Annotations, v1alpha3.ScheduledRunBindingRequiredAnnotation)
 	_, err = client.CreateScheduledRun(t.Context(), &apiv1alpha1.CreateScheduledRunRequest{Ref: ref, Resource: wire})
 	require.Equal(t, codes.AlreadyExists, status.Code(err))
 	listed, err := client.ListScheduledRuns(t.Context(), &apiv1alpha1.ListScheduledRunsRequest{Namespace: resource.Namespace})
 	require.NoError(t, err)
 	require.Len(t, listed.GetScheduledRuns(), 1)
+	require.Equal(t, "admin@kagent.dev", listed.GetScheduledRuns()[0].GetBoundUserId())
 }

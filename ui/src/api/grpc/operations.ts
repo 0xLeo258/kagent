@@ -1289,7 +1289,7 @@ export const defaultOperations: ApiOperations = {
   "scheduledRuns.update": async (input, options) => {
     const name = "ScheduledRunService/UpdateScheduledRun";
     const response = await rpc(name, options.signal, () => serviceClient(ScheduledRunService)
-      .updateScheduledRun(scheduledRunPayload(input), call("scheduledRuns.update", options)));
+      .updateScheduledRun(scheduledRunPayload(input, true), call("scheduledRuns.update", options)));
     return toScheduledRun(required(response.scheduledRun, name, "scheduled run"), name);
   },
   "scheduledRuns.delete": async (input, options) => {
@@ -1320,17 +1320,28 @@ function toScheduledRun(entry: PbScheduledRun, rpcName: string): ScheduledRun {
   if (!resource.spec?.targetRef?.name || !resource.spec.harnessRef?.name || !entry.ref?.namespace || !entry.ref.name) {
     throw new ApiError("The scheduled run is missing its identity or agent references.", { kind: "parse", url: rpcName });
   }
-  return { namespace: entry.ref.namespace, name: entry.ref.name, resource };
+  return {
+    namespace: entry.ref.namespace,
+    name: entry.ref.name,
+    boundUserId: orUndefined(entry.boundUserId),
+    resource,
+  };
 }
 
-function scheduledRunPayload(input: ScheduledRunWrite) {
-  const { labels, annotations } = input.resource.metadata;
+function scheduledRunPayload(input: ScheduledRunWrite, updating = false) {
+  const { labels, annotations, uid, generation } = input.resource.metadata;
   return {
     ref: { namespace: input.namespace, name: input.name },
     resource: wrap("ScheduledRun", {
       apiVersion: KAGENT_API_VERSION,
       kind: "ScheduledRun",
-      metadata: { namespace: input.namespace, name: input.name, ...(labels ? { labels } : {}), ...(annotations ? { annotations } : {}) },
+      metadata: {
+        namespace: input.namespace,
+        name: input.name,
+        ...(labels ? { labels } : {}),
+        ...(annotations ? { annotations } : {}),
+        ...(updating ? { uid, generation } : {}),
+      },
       spec: input.resource.spec,
     }),
   };

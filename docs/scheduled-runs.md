@@ -24,7 +24,6 @@ spec:
   executionTimeout: 15m
   recentExecutionsLimit: 10
   suspended: false
-  allowSessionInteraction: false
 ```
 
 Install the updated CRD chart before the controller chart, then apply the
@@ -38,6 +37,11 @@ trigger works while the schedule is paused. Each accepted trigger appears as
 `InProgress` immediately; its conversation link becomes available once the
 AgentInstance has been created. The same operations are exposed by the gRPC
 `kagent.api.v1alpha1.ScheduledRunService`.
+
+Updates must include `metadata.uid` and `metadata.generation` from the resource
+read before editing. A replaced resource or a concurrent spec change returns
+`Aborted`; reload and review the current spec before retrying. Controller status
+updates do not invalidate an edit. Create requests do not need these fields.
 
 ## Timing and outcomes
 
@@ -57,7 +61,9 @@ The elected controller processes durable execution requests, including requests
 accepted by another API replica. It stores the prompt and deadline at acceptance,
 uses stable instance-creation and message identifiers, and recovers existing
 tasks after a restart. Recovery checks an existing task's final state before
-classifying an elapsed deadline. Execution writes are fenced by the ScheduledRun
+classifying an elapsed deadline. It waits for runtime state to be persisted;
+if the live execution stream is gone, it checks the runtime's retained task.
+Execution writes are fenced by the ScheduledRun
 UID so a replacement with the same name cannot inherit an old execution.
 If the runtime reports that an interrupted dispatch has no task, recovery can
 mark it `Failed`; this does not promise exactly-once execution across failures.
@@ -84,11 +90,34 @@ cursor pagination. Summary pruning does not delete execution history.
 
 Scheduled conversations are reached from execution history and are excluded
 from ordinary conversation lists. A caller must be authenticated and authorized
-to read the owning ScheduledRun. Conversations are read-only by default.
-Setting `allowSessionInteraction: true` permits those readers to send messages,
-answer requests for input, cancel tasks, and resume or suspend the instance.
-The server checks the current policy for each new request. Schedule readers
-cannot rename or delete these conversations or create independent share links.
+to read the owning ScheduledRun. Schedules created through the UI or API bind
+the authenticated user at creation. Only that user may continue their execution
+conversations, answer requests for input, cancel tasks, and resume or suspend
+the instance. Other authorized readers and agent identities have read-only
+access, even when an agent carries the bound user ID. Schedules created
+through Kubernetes have no user binding: they run under the internal system
+identity and their conversations are read-only for every human caller. Triggering
+an unbound schedule through the API does not bind it to the triggering user.
+
+The binding is immutable and stored in PostgreSQL under the ScheduledRun UID;
+there is no YAML user field or interaction switch. Metadata and Kubernetes status
+cannot grant conversation access. The API exposes the binding as the read-only
+`bound_user_id` response field. Updating a schedule does not change its binding.
+Each accepted execution snapshots the owner, so dispatch, recovery, and later
+conversation turns use the same runtime session identity. The binding stores a
+user ID, not a user's token; automation still uses controller authentication.
+With authentication disabled, the binding follows the installation's existing
+insecure user identity convention.
+
+API-created resources carry `kagent.dev/scheduled-run-binding-required`. They
+can execute only after their UID has a database binding. This prevents an
+interrupted create from running under the system identity. The marker conveys
+no identity; copying it to a replacement resource does not copy the binding.
+If binding fails, the resource remains blocked with `BindingPending`; delete it
+and retry creation.
+
+The server checks access for every new request. Schedule readers cannot rename
+or delete these conversations or create independent share links.
 
 Deleting a ScheduledRun stops future dispatch and removes access through that
 schedule. It does not purge persisted execution history or AgentInstances.
@@ -114,5 +143,5 @@ KAGENT_E2E_API_URL=http://localhost:8083 \
 ```
 
 This test uses the mock LLM and verifies manual execution while paused,
-independent conversations, paginated history, read-only access, continuation
-after a policy update, and isolation after deleting and recreating a schedule.
+independent conversations, paginated history, owner continuation, read-only
+access for another reader, and isolation after deleting and recreating a schedule.

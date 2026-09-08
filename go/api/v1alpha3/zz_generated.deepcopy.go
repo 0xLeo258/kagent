@@ -1540,11 +1540,6 @@ func (in *ScheduledRunSpec) DeepCopyInto(out *ScheduledRunSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.AllowSessionInteraction != nil {
-		in, out := &in.AllowSessionInteraction, &out.AllowSessionInteraction
-		*out = new(bool)
-		**out = **in
-	}
 	if in.ExecutionTimeout != nil {
 		in, out := &in.ExecutionTimeout, &out.ExecutionTimeout
 		*out = new(metav1.Duration)

@@ -129,6 +129,46 @@ func TestServiceCreateUsesAuthenticatedOwnerAndGeneratedUUID(t *testing.T) {
 	}
 }
 
+func TestServiceCreateForOwnerRequiresSchedulerIdentity(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		caller  string
+		owner   string
+		wantErr serviceerrors.Code
+	}{
+		{name: "bound owner", caller: auth.ScheduledRunUserID, owner: "alice"},
+		{name: "system owner", caller: auth.ScheduledRunUserID, owner: auth.ScheduledRunUserID},
+		{name: "ordinary caller", caller: "alice", owner: "bob", wantErr: serviceerrors.CodePermissionDenied},
+		{name: "empty owner", caller: auth.ScheduledRunUserID, wantErr: serviceerrors.CodeInvalidArgument},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &serviceTestStore{}
+			service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
+			instance, err := service.CreateForOwner(serviceTestContext(test.caller), &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "kagent"}, &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "assistant"}, "scheduled-execution", "nightly", test.owner)
+			if test.wantErr != "" {
+				if !serviceerrors.IsCode(err, test.wantErr) || store.createInput != nil {
+					t.Fatalf("CreateForOwner() error = %v, input = %v", err, store.createInput)
+				}
+				return
+			}
+			if err != nil || instance.GetCreator() != test.owner || store.requestID != "scheduled-execution" {
+				t.Fatalf("CreateForOwner() = %v, %v", instance, err)
+			}
+		})
+	}
+}
+
+func TestServiceCreateKeepsCallerAsOwnerWithShareContext(t *testing.T) {
+	store := &serviceTestStore{}
+	service := NewService(store, serviceTestAuthorizer{}, serviceTestWorkflow{})
+	template := uuid.NewString()
+	ctx := auth.ShareContextTo(serviceTestContext("alice"), &auth.ShareContext{AgentInstanceID: template, UserID: "bob"})
+	instance, err := service.Create(ctx, &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: "kagent"}, &apiv1alpha1.ResourceReference{Namespace: "team-a", Name: template}, "request-1", "")
+	if err != nil || instance.GetCreator() != "alice" {
+		t.Fatalf("Create() = %v, %v; share context must not choose the new owner", instance, err)
+	}
+}
+
 func TestServiceCreateMapsStoreErrors(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -203,7 +243,7 @@ func TestServiceListPaginatesByInstanceID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(result.Instances) != 2 || store.listQuery.UserID != "alice" || store.listQuery.AllUsers || store.listQuery.Limit != 3 || store.listQuery.ExcludeUserID != auth.ScheduledRunUserID {
+	if len(result.Instances) != 2 || store.listQuery.UserID != "alice" || store.listQuery.AllUsers || store.listQuery.Limit != 3 || !store.listQuery.ExcludeScheduledRuns {
 		t.Fatalf("List() = %+v, query = %+v", result, store.listQuery)
 	}
 	afterID, err := decodePageToken(result.NextPageToken)
@@ -213,7 +253,7 @@ func TestServiceListPaginatesByInstanceID(t *testing.T) {
 	if _, err := service.List(serviceTestContext("alice"), ListRequest{AllCreators: true}); err != nil {
 		t.Fatal(err)
 	}
-	if store.listQuery.UserID != "alice" || !store.listQuery.AllUsers || store.listQuery.ExcludeUserID != auth.ScheduledRunUserID {
+	if store.listQuery.UserID != "alice" || !store.listQuery.AllUsers || !store.listQuery.ExcludeScheduledRuns {
 		t.Fatalf("operator list query = %+v", store.listQuery)
 	}
 }

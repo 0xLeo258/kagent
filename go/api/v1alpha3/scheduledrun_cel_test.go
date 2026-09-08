@@ -39,16 +39,14 @@ func TestScheduledRunCRDValidation(t *testing.T) {
 			},
 		}
 	}
-	t.Run("defaults and mutable policy", func(t *testing.T) {
+	t.Run("defaults and mutable settings", func(t *testing.T) {
 		sr := newSchedule("defaults")
 		require.NoError(t, kube.Create(t.Context(), sr))
 		require.Equal(t, "UTC", *sr.Spec.TimeZone)
 		require.False(t, *sr.Spec.Suspended)
-		require.False(t, *sr.Spec.AllowSessionInteraction)
 		require.Equal(t, 15*time.Minute, sr.Spec.ExecutionTimeout.Duration)
 		require.EqualValues(t, 10, *sr.Spec.RecentExecutionsLimit)
 		sr.Spec.Prompt = "Updated prompt"
-		sr.Spec.AllowSessionInteraction = new(true)
 		sr.Spec.Suspended = new(true)
 		require.NoError(t, kube.Update(t.Context(), sr))
 	})

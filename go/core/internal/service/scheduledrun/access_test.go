@@ -49,25 +49,28 @@ func TestResolveInstanceAccessUsesLiveSchedule(t *testing.T) {
 	authorizer := &accessAuthorizer{}
 	s := &Service{kube: kube, authorizer: authorizer, store: &accessStore{execution: &dbpkg.ScheduledRunExecution{
 		AgentInstanceID: instanceID, ScheduledRunNamespace: "team", ScheduledRunName: "daily", ScheduledRunUID: "original",
+		UserID: "owner",
 	}}}
 	ctx := auth.AuthSessionTo(t.Context(), &authimpl.SimpleSession{P: auth.Principal{User: auth.User{ID: "reader"}}})
 	access, err := s.ResolveInstanceAccess(ctx, instanceID)
 	require.NoError(t, err)
 	require.NotNil(t, access)
 	assert.True(t, access.ReadOnly)
-	assert.Equal(t, auth.ScheduledRunUserID, access.UserID)
+	assert.Equal(t, "owner", access.UserID)
 	assert.Equal(t, "reader", authorizer.principal.User.ID)
 	assert.Equal(t, auth.VerbGet, authorizer.verb)
 	assert.Equal(t, auth.Resource{Type: "ScheduledRun", Name: "team/daily"}, authorizer.resource)
 
-	// Permission changes apply to existing conversations on the next call.
+	// Schedule updates cannot transfer ownership of an existing conversation.
 	key := types.NamespacedName{Namespace: "team", Name: "daily"}
 	require.NoError(t, kube.Get(ctx, key, run))
-	run.Spec.AllowSessionInteraction = new(true)
+	run.Spec.Prompt = "updated prompt"
 	require.NoError(t, kube.Update(ctx, run))
 	access, err = s.ResolveInstanceAccess(ctx, instanceID)
 	require.NoError(t, err)
-	assert.False(t, access.ReadOnly)
+	assert.True(t, access.ReadOnly)
+	assert.Equal(t, "owner", access.UserID)
+	// Revoking ScheduledRun read permission also revokes conversation access.
 	authorizer.err = errors.New("access revoked")
 	_, err = s.ResolveInstanceAccess(ctx, instanceID)
 	assert.Equal(t, serviceerrors.CodePermissionDenied, serviceerrors.CodeOf(err))
@@ -83,6 +86,46 @@ func TestResolveInstanceAccessUsesLiveSchedule(t *testing.T) {
 	require.NoError(t, kube.Delete(ctx, run))
 	_, err = s.ResolveInstanceAccess(ctx, instanceID)
 	assert.Equal(t, serviceerrors.CodeNotFound, serviceerrors.CodeOf(err))
+}
+
+func TestResolveInstanceAccessRequiresBoundOwner(t *testing.T) {
+	const instanceID = "01993019-e480-7412-96fb-f239f1f000c1"
+	tests := []struct {
+		name     string
+		owner    string
+		caller   string
+		agentID  string
+		readOnly bool
+	}{
+		{name: "bound owner", owner: "alice", caller: "alice"},
+		{name: "agent delegates bound owner", owner: "alice", caller: "alice", agentID: "agent", readOnly: true},
+		{name: "another authorized reader", owner: "alice", caller: "bob", readOnly: true},
+		{name: "unbound schedule", owner: auth.ScheduledRunUserID, caller: "alice", readOnly: true},
+		{name: "system is never interactive", owner: auth.ScheduledRunUserID, caller: auth.ScheduledRunUserID, readOnly: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scheme := runtime.NewScheme()
+			require.NoError(t, v1alpha3.AddToScheme(scheme))
+			run := &v1alpha3.ScheduledRun{ObjectMeta: metav1.ObjectMeta{Namespace: "team", Name: "daily", UID: "original"}}
+			s := &Service{
+				kube: fake.NewClientBuilder().WithScheme(scheme).WithObjects(run).Build(), authorizer: &accessAuthorizer{},
+				store: &accessStore{execution: &dbpkg.ScheduledRunExecution{
+					AgentInstanceID: instanceID, ScheduledRunNamespace: "team", ScheduledRunName: "daily", ScheduledRunUID: "original", UserID: tt.owner,
+				}},
+			}
+			session := &authimpl.SimpleSession{P: auth.Principal{User: auth.User{ID: tt.caller}, Agent: auth.Agent{ID: tt.agentID}}}
+			ctx := auth.AuthSessionTo(t.Context(), session)
+			access, err := s.ResolveInstanceAccess(ctx, instanceID)
+			require.NoError(t, err)
+			require.NotNil(t, access)
+			assert.Equal(t, tt.readOnly, access.ReadOnly)
+			assert.Equal(t, tt.owner, access.UserID)
+			actualSession, ok := auth.AuthSessionFrom(ctx)
+			require.True(t, ok)
+			assert.Same(t, session, actualSession)
+		})
+	}
 }
 
 func TestResolveInstanceAccessOrdinaryAndUnavailableStore(t *testing.T) {

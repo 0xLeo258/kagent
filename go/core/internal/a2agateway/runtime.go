@@ -76,9 +76,9 @@ func (d *RuntimeDialer) Dial(ctx context.Context, instance *apiv1alpha1.AgentIns
 	)
 }
 
-// upstreamAuthInterceptor mirrors the current gateway's per-request auth
-// forwarding. ServiceParams make the resulting headers transport-neutral: the
-// A2A gRPC transport carries them as metadata to the private runtime.
+// upstreamAuthInterceptor forwards caller credentials while keeping runtime
+// sessions in the persisted instance owner's partition. The A2A gRPC transport
+// carries the resulting ServiceParams as metadata to the private runtime.
 type upstreamAuthInterceptor struct {
 	a2aclient.PassthroughInterceptor
 	authenticator auth.AuthProvider
@@ -96,6 +96,10 @@ func (u *upstreamAuthInterceptor) Before(ctx context.Context, req *a2aclient.Req
 			return ctx, nil, err
 		}
 	}
+	// Authorization and upstream credentials belong to the caller; ADK session,
+	// task, and memory state belong to the instance throughout its lifetime.
+	httpRequest.Header.Set("X-User-Id", u.instance.GetCreator())
+	delete(req.ServiceParams, "x-user-id")
 	propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(httpRequest.Header))
 	for key, values := range httpRequest.Header {
 		for _, value := range values {

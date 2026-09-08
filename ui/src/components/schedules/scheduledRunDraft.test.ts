@@ -8,9 +8,8 @@ import {
 } from "./scheduledRunDraft";
 
 describe("schedule authoring", () => {
-  it("defaults conversations to read-only and requires a complete target", () => {
+  it("requires a complete target", () => {
     const draft = emptyScheduledRunDraft();
-    expect(draft.allowSessionInteraction).toBe(false);
     expect(scheduledRunDraftIssues(draft)).toContain(
       "Select an agent template and harness.",
     );
@@ -35,12 +34,14 @@ describe("schedule authoring", () => {
     ).toBe(true);
   });
 
-  it("preserves immutable targets and annotations but discards server metadata and status", () => {
+  it("preserves the original spec version and immutable targets while omitting status metadata", () => {
     const run = fixtureScheduledRun();
     run.resource.metadata = {
       ...run.resource.metadata,
       annotations: { owner: "team" },
       resourceVersion: "42",
+      uid: "original-schedule",
+      generation: 7,
     };
     const payload = scheduledRunPayloadFrom(
       {
@@ -60,6 +61,8 @@ describe("schedule authoring", () => {
     });
     expect(payload.resource.metadata).toMatchObject({
       annotations: { owner: "team" },
+      uid: "original-schedule",
+      generation: 7,
     });
     expect(payload.resource.metadata).not.toHaveProperty("resourceVersion");
     expect(payload.resource).not.toHaveProperty("status");

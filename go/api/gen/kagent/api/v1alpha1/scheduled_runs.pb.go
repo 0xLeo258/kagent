@@ -27,7 +27,10 @@ type ScheduledRun struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Ref   *ResourceReference     `protobuf:"bytes,1,opt,name=ref,proto3" json:"ref,omitempty"`
 	// The complete kagent.dev/v1alpha3 ScheduledRun Kubernetes resource.
-	Resource      *StructuredObject `protobuf:"bytes,2,opt,name=resource,proto3" json:"resource,omitempty"`
+	Resource *StructuredObject `protobuf:"bytes,2,opt,name=resource,proto3" json:"resource,omitempty"`
+	// The user bound to this schedule by the server. Empty means unbound.
+	// Only this user may interact with its conversations; this is not a writable field.
+	BoundUserId   string `protobuf:"bytes,3,opt,name=bound_user_id,json=boundUserId,proto3" json:"bound_user_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -74,6 +77,13 @@ func (x *ScheduledRun) GetResource() *StructuredObject {
 		return x.Resource
 	}
 	return nil
+}
+
+func (x *ScheduledRun) GetBoundUserId() string {
+	if x != nil {
+		return x.BoundUserId
+	}
+	return ""
 }
 
 type ScheduledRunExecution struct {
@@ -822,10 +832,11 @@ var File_kagent_api_v1alpha1_scheduled_runs_proto protoreflect.FileDescriptor
 
 const file_kagent_api_v1alpha1_scheduled_runs_proto_rawDesc = "" +
 	"\n" +
-	"(kagent/api/v1alpha1/scheduled_runs.proto\x12\x13kagent.api.v1alpha1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a kagent/api/v1alpha1/common.proto\"\x8b\x01\n" +
+	"(kagent/api/v1alpha1/scheduled_runs.proto\x12\x13kagent.api.v1alpha1\x1a\x1bbuf/validate/validate.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a kagent/api/v1alpha1/common.proto\"\xaf\x01\n" +
 	"\fScheduledRun\x128\n" +
 	"\x03ref\x18\x01 \x01(\v2&.kagent.api.v1alpha1.ResourceReferenceR\x03ref\x12A\n" +
-	"\bresource\x18\x02 \x01(\v2%.kagent.api.v1alpha1.StructuredObjectR\bresource\"\xc5\x02\n" +
+	"\bresource\x18\x02 \x01(\v2%.kagent.api.v1alpha1.StructuredObjectR\bresource\x12\"\n" +
+	"\rbound_user_id\x18\x03 \x01(\tR\vboundUserId\"\xc5\x02\n" +
 	"\x15ScheduledRunExecution\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x129\n" +
 	"\n" +

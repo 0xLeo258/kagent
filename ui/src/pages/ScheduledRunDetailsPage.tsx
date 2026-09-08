@@ -9,6 +9,7 @@ import {
   scheduledRunWrite,
   useScheduledRun,
   useScheduledRunExecutions,
+  type ScheduledRun,
 } from "@/api";
 import { PageFrame } from "@/components/Structure/PageFrame";
 import { DeleteResourceButton } from "@/components/table/DeleteResourceButton";
@@ -45,7 +46,12 @@ function ScheduledRunDetails({
   const navigate = useNavigate();
   const run = useScheduledRun(namespace, name);
   const history = useScheduledRunExecutions(namespace, name);
-  const [draft, setDraft] = useState<ScheduledRunDraft>();
+  // Polling may replace run.data while editing. The precondition must stay with
+  // the spec the reader started editing, so concurrent changes are refused.
+  const [edit, setEdit] = useState<{
+    base: ScheduledRun;
+    draft: ScheduledRunDraft;
+  }>();
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const data = run.data;
@@ -64,7 +70,7 @@ function ScheduledRunDetails({
       await operation();
       await refresh();
       toast.success(success);
-      if (action === "save") setDraft(undefined);
+      if (action === "save") setEdit(undefined);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -86,11 +92,11 @@ function ScheduledRunDetails({
             onRefresh={refresh}
             loading={run.isValidating}
           />
-          {data && !draft && (
+          {data && !edit && (
             <>
               <Button
                 icon={<Pencil size={14} />}
-                onClick={() => setDraft(scheduledRunDraftFrom(data))}
+                onClick={() => setEdit({ base: data, draft: scheduledRunDraftFrom(data) })}
                 disabled={Boolean(busy)}
               >
                 Edit
@@ -168,19 +174,19 @@ function ScheduledRunDetails({
         )}
         {run.isLoading && <Skeleton active />}
         {data &&
-          (draft ? (
+          (edit ? (
             <ScheduledRunForm
-              draft={draft}
-              onChange={setDraft}
+              draft={edit.draft}
+              onChange={(draft) => setEdit({ ...edit, draft })}
               editing
               submitting={Boolean(busy)}
-              onCancel={() => setDraft(undefined)}
+              onCancel={() => setEdit(undefined)}
               onSubmit={() =>
                 void perform(
                   "save",
                   () =>
                     apiClient.scheduledRuns.update(
-                      scheduledRunPayloadFrom(draft, data),
+                      scheduledRunPayloadFrom(edit.draft, edit.base),
                     ),
                   "Schedule saved",
                 )
@@ -228,11 +234,16 @@ function ScheduledRunDetails({
                     children: data.resource.spec.timeZone ?? "UTC",
                   },
                   {
+                    key: "bound-user",
+                    label: "Bound user",
+                    children: data.boundUserId || "Unbound",
+                  },
+                  {
                     key: "interaction",
-                    label: "Conversation interaction",
-                    children: data.resource.spec.allowSessionInteraction
-                      ? "Allowed"
-                      : "Read-only",
+                    label: "Conversation replies",
+                    children: data.boundUserId
+                      ? "Bound user only"
+                      : "Read-only for everyone",
                   },
                   {
                     key: "timeout",

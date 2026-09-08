@@ -27,16 +27,31 @@ import (
 )
 
 type testStore struct {
-	mu        sync.Mutex
-	records   map[string]database.ScheduledRunExecution
-	createErr error
-	updateErr error
-	instances *testInstances
+	mu          sync.Mutex
+	records     map[string]database.ScheduledRunExecution
+	createErr   error
+	updateErr   error
+	instances   *testInstances
+	bindings    map[string]database.ScheduledRunBinding
+	bindingErr  error
+	lookupOwner string
 }
 
 var _ executionStore = (*testStore)(nil)
 
-func (s *testStore) GetAgentInstanceByRequestID(_ context.Context, _, requestID string) (*apiv1alpha1.AgentInstance, error) {
+func (s *testStore) GetScheduledRunBinding(_ context.Context, namespace, name, uid string) (*database.ScheduledRunBinding, error) {
+	if s.bindingErr != nil {
+		return nil, s.bindingErr
+	}
+	binding, ok := s.bindings[uid]
+	if !ok || binding.ScheduledRunNamespace != namespace || binding.ScheduledRunName != name {
+		return nil, database.ErrNotFound
+	}
+	return &binding, nil
+}
+
+func (s *testStore) GetAgentInstanceByRequestID(_ context.Context, owner, requestID string) (*apiv1alpha1.AgentInstance, error) {
+	s.lookupOwner = owner
 	s.instances.mu.Lock()
 	defer s.instances.mu.Unlock()
 	id := s.instances.byID[requestID]
@@ -125,6 +140,7 @@ type testInstances struct {
 	mu       sync.Mutex
 	byID     map[string]string
 	requests []string
+	owners   []string
 	after    func()
 	harness  *apiv1alpha1.ResourceReference
 	template *apiv1alpha1.ResourceReference
@@ -132,7 +148,7 @@ type testInstances struct {
 
 var _ instanceCreator = (*testInstances)(nil)
 
-func (i *testInstances) Create(ctx context.Context, harness, template *apiv1alpha1.ResourceReference, requestID, _ string) (*apiv1alpha1.AgentInstance, error) {
+func (i *testInstances) CreateForOwner(ctx context.Context, harness, template *apiv1alpha1.ResourceReference, requestID, _, owner string) (*apiv1alpha1.AgentInstance, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	session, ok := auth.AuthSessionFrom(ctx)
@@ -141,6 +157,7 @@ func (i *testInstances) Create(ctx context.Context, harness, template *apiv1alph
 	}
 	i.harness, i.template = harness, template
 	i.requests = append(i.requests, requestID)
+	i.owners = append(i.owners, owner)
 	if i.byID[requestID] == "" {
 		i.byID[requestID] = uuid.NewString()
 	}
@@ -153,6 +170,7 @@ func (i *testInstances) Create(ctx context.Context, harness, template *apiv1alph
 type testGateway struct {
 	send      func(context.Context, *a2atype.SendMessageRequest) (a2atype.SendMessageResult, error)
 	get       func(context.Context, *a2atype.GetTaskRequest) (*a2atype.Task, error)
+	subscribe func(context.Context, *a2atype.SubscribeToTaskRequest) iter.Seq2[a2atype.Event, error]
 	tasks     []*a2atype.Task
 	sends     int
 	subs      int
@@ -195,8 +213,11 @@ func (g *testGateway) ListTasks(_ context.Context, request *a2atype.ListTasksReq
 	return &a2atype.ListTasksResponse{Tasks: g.tasks}, nil
 }
 
-func (g *testGateway) SubscribeToTask(_ context.Context, request *a2atype.SubscribeToTaskRequest) iter.Seq2[a2atype.Event, error] {
+func (g *testGateway) SubscribeToTask(ctx context.Context, request *a2atype.SubscribeToTaskRequest) iter.Seq2[a2atype.Event, error] {
 	g.subs++
+	if g.subscribe != nil {
+		return g.subscribe(ctx, request)
+	}
 	return func(yield func(a2atype.Event, error) bool) {
 		yield(&a2atype.Task{ID: request.ID, Status: a2atype.TaskStatus{State: a2atype.TaskStateWorking}}, nil)
 	}
@@ -232,30 +253,25 @@ func testScheduler(t *testing.T, sr *v1alpha3.ScheduledRun) (*Scheduler, *testSt
 	return scheduler, store, instances, gateway
 }
 
-func TestValidateSpec(t *testing.T) {
-	tests := []struct {
-		name    string
-		change  func(*v1alpha3.ScheduledRunSpec)
-		wantErr string
+func TestParseSchedule(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		schedule string
+		zone     *string
+		wantErr  bool
 	}{
-		{name: "default", change: func(*v1alpha3.ScheduledRunSpec) {}},
-		{name: "legacy target", change: func(s *v1alpha3.ScheduledRunSpec) { s.TargetRef.Kind = "Agent" }, wantErr: "AgentTemplate"},
-		{name: "invalid harness", change: func(s *v1alpha3.ScheduledRunSpec) { s.HarnessRef.Name = "bad/name" }, wantErr: "harnessRef"},
-		{name: "cron descriptor", change: func(s *v1alpha3.ScheduledRunSpec) { s.Schedule = "@hourly" }, wantErr: "five-field"},
-		{name: "invalid timezone", change: func(s *v1alpha3.ScheduledRunSpec) { s.TimeZone = new("Mars/Olympus") }, wantErr: "timeZone"},
-		{name: "blank prompt", change: func(s *v1alpha3.ScheduledRunSpec) { s.Prompt = "\n " }, wantErr: "prompt"},
-		{name: "nonpositive timeout", change: func(s *v1alpha3.ScheduledRunSpec) { s.ExecutionTimeout = &metav1.Duration{} }, wantErr: "executionTimeout"},
-		{name: "unbounded history", change: func(s *v1alpha3.ScheduledRunSpec) { s.RecentExecutionsLimit = new(int32(101)) }, wantErr: "recentExecutionsLimit"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			spec := testScheduledRun().Spec
-			tt.change(&spec)
-			err := ValidateSpec(spec)
-			if tt.wantErr == "" {
-				require.NoError(t, err)
+		{name: "default timezone", schedule: "0 9 * * *"},
+		{name: "IANA timezone", schedule: "0 9 * * *", zone: new("Asia/Shanghai")},
+		{name: "invalid minute", schedule: "99 9 * * *", wantErr: true},
+		{name: "descriptor", schedule: "@hourly", wantErr: true},
+		{name: "invalid timezone", schedule: "0 9 * * *", zone: new("Mars/Olympus"), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseSchedule(v1alpha3.ScheduledRunSpec{Schedule: tc.schedule, TimeZone: tc.zone})
+			if tc.wantErr {
+				require.Error(t, err)
 			} else {
-				require.ErrorContains(t, err, tt.wantErr)
+				require.NoError(t, err)
 			}
 		})
 	}
@@ -271,6 +287,7 @@ func TestManualTriggerDurablyQueuesSuspendedRun(t *testing.T) {
 	assert.Equal(t, v1alpha3.ScheduledRunExecutionStatus_InProgress, execution.Status)
 	assert.Equal(t, v1alpha3.ScheduledRunExecutionTrigger_Manual, execution.Trigger)
 	assert.Equal(t, sr.Spec.Prompt, execution.Prompt)
+	assert.Equal(t, SystemUserID, execution.UserID)
 	assert.Equal(t, v1alpha3.DefaultScheduledRunExecutionTimeout, execution.Deadline.Sub(execution.StartTime))
 	assert.Empty(t, instances.requests)
 	assert.Zero(t, gateway.sends)
@@ -279,6 +296,78 @@ func TestManualTriggerDurablyQueuesSuspendedRun(t *testing.T) {
 	automatic, err := s.reserve(t.Context(), client.ObjectKeyFromObject(sr), sr.UID, false)
 	require.NoError(t, err)
 	assert.Nil(t, automatic)
+}
+
+func TestBoundExecutionRecoveryKeepsOwnerSnapshot(t *testing.T) {
+	sr := testScheduledRun()
+	s, store, instances, gateway := testScheduler(t, sr)
+	store.bindings = map[string]database.ScheduledRunBinding{string(sr.UID): {
+		ScheduledRunNamespace: sr.Namespace, ScheduledRunName: sr.Name, ScheduledRunUID: string(sr.UID), BoundUserID: "alice",
+	}}
+	execution, err := s.TriggerManualExecution(t.Context(), client.ObjectKeyFromObject(sr))
+	require.NoError(t, err)
+	require.Equal(t, "alice", execution.UserID)
+	// Recovery must use the persisted snapshot even if the binding lookup is no
+	// longer available after restart.
+	store.bindingErr = errors.New("binding unavailable after reservation")
+	store.updateErr = errors.New("lost phase write")
+	require.ErrorContains(t, s.runExecution(t.Context(), execution), "lost phase write")
+	stored, err := store.GetScheduledRunExecution(t.Context(), execution.ID)
+	require.NoError(t, err)
+	require.Equal(t, database.ScheduledRunExecutionPhaseCreating, stored.Phase)
+	store.updateErr = nil
+	gateway.send = func(ctx context.Context, req *a2atype.SendMessageRequest) (a2atype.SendMessageResult, error) {
+		session, ok := auth.AuthSessionFrom(ctx)
+		require.True(t, ok)
+		require.Equal(t, SystemUserID, session.Principal().User.ID)
+		share, ok := auth.ShareContextFrom(ctx)
+		require.True(t, ok)
+		require.Equal(t, "alice", share.UserID)
+		return &a2atype.Task{ID: "task", ContextID: req.Message.ContextID, Status: a2atype.TaskStatus{State: a2atype.TaskStateCompleted}}, nil
+	}
+	restarted, err := NewScheduler(Config{Kube: s.kube, Store: store, Instances: instances, Gateway: gateway})
+	require.NoError(t, err)
+	require.NoError(t, restarted.runExecution(t.Context(), stored))
+	require.Equal(t, []string{"alice", "alice"}, instances.owners)
+	require.Len(t, instances.byID, 1)
+}
+
+func TestPendingOrUnavailableBindingDoesNotQueueExecution(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		pending bool
+	}{
+		{name: "pending binding", pending: true},
+		{name: "binding database failure"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sr := testScheduledRun()
+			if test.pending {
+				sr.Annotations = map[string]string{v1alpha3.ScheduledRunBindingRequiredAnnotation: ""}
+			}
+			s, store, _, _ := testScheduler(t, sr)
+			if !test.pending {
+				store.bindingErr = errors.New("binding store unavailable")
+			}
+			_, err := s.TriggerManualExecution(t.Context(), client.ObjectKeyFromObject(sr))
+			require.Error(t, err)
+			require.Empty(t, store.records)
+		})
+	}
+}
+
+func TestExpiredBoundCreationRecoversUsingOwnerSnapshot(t *testing.T) {
+	sr := testScheduledRun()
+	s, store, instances, _ := testScheduler(t, sr)
+	execution, err := s.TriggerManualExecution(t.Context(), client.ObjectKeyFromObject(sr))
+	require.NoError(t, err)
+	execution.UserID, execution.Deadline = "alice", time.Now().Add(-time.Second)
+	store.records[execution.ID] = *execution
+	instances.byID[execution.ID] = uuid.NewString()
+	require.NoError(t, s.runExecution(t.Context(), execution))
+	require.Equal(t, "alice", store.lookupOwner)
+	require.Empty(t, instances.requests)
+	require.Equal(t, instances.byID[execution.ID], execution.AgentInstanceID)
 }
 
 func TestFailedReservationDoesNotDispatch(t *testing.T) {
@@ -419,6 +508,35 @@ func TestExpiredPollingReadsActualOutcomeAndCancelsActiveTasks(t *testing.T) {
 	}
 }
 
+func TestExpiredPollingRecoversOfflineCompletionBeforeTimeout(t *testing.T) {
+	sr := testScheduledRun()
+	s, store, _, gateway := testScheduler(t, sr)
+	execution, err := s.TriggerManualExecution(t.Context(), client.ObjectKeyFromObject(sr))
+	require.NoError(t, err)
+	execution.AgentInstanceID, execution.TaskID = uuid.NewString(), "task"
+	execution.Phase = database.ScheduledRunExecutionPhasePolling
+	execution.Deadline = time.Now().Add(-time.Minute)
+	store.records[execution.ID] = *execution
+	// The public row predates the outage. Only reattaching to the gateway can
+	// recover the task that completed in the private runtime while offline.
+	task := &a2atype.Task{ID: "task", Status: a2atype.TaskStatus{State: a2atype.TaskStateWorking}}
+	gateway.tasks = []*a2atype.Task{task}
+	gateway.subscribe = func(ctx context.Context, _ *a2atype.SubscribeToTaskRequest) iter.Seq2[a2atype.Event, error] {
+		return func(yield func(a2atype.Event, error) bool) {
+			require.NoError(t, ctx.Err(), "recovery must have a live context after the execution deadline")
+			task.Status.State = a2atype.TaskStateCompleted
+			yield(task, nil)
+		}
+	}
+	require.NoError(t, s.runExecution(t.Context(), execution))
+	completed, err := store.GetScheduledRunExecution(t.Context(), execution.ID)
+	require.NoError(t, err)
+	require.Equal(t, v1alpha3.ScheduledRunExecutionStatus_Succeeded, completed.Status)
+	require.Equal(t, 1, gateway.subs)
+	require.Zero(t, gateway.cancels)
+	require.Zero(t, gateway.sends)
+}
+
 func TestStatusWritesFenceRecreatedScheduledRun(t *testing.T) {
 	sr := testScheduledRun()
 	s, store, _, _ := testScheduler(t, sr)
@@ -449,7 +567,7 @@ func TestSummaryRecoversTerminalHistoryAndKeepsOlderInProgress(t *testing.T) {
 			status = v1alpha3.ScheduledRunExecutionStatus_InProgress
 		}
 		id := fmt.Sprintf("execution-%03d", index)
-		store.records[id] = database.ScheduledRunExecution{ID: id, ScheduledRunNamespace: sr.Namespace, ScheduledRunName: sr.Name, ScheduledRunUID: string(sr.UID), StartTime: start.Add(time.Duration(index) * time.Minute), Status: status}
+		store.records[id] = database.ScheduledRunExecution{ID: id, ScheduledRunNamespace: sr.Namespace, ScheduledRunName: sr.Name, ScheduledRunUID: string(sr.UID), UserID: SystemUserID, StartTime: start.Add(time.Duration(index) * time.Minute), Status: status}
 	}
 	summary, err := s.executionSummary(t.Context(), sr)
 	require.NoError(t, err)
@@ -466,7 +584,7 @@ func TestSummaryBoundsActiveRecordsAndMessageSize(t *testing.T) {
 	for index := range maxInProgressSummary + 5 {
 		id := fmt.Sprintf("active-%03d", index)
 		store.records[id] = database.ScheduledRunExecution{
-			ID: id, ScheduledRunNamespace: sr.Namespace, ScheduledRunName: sr.Name, ScheduledRunUID: string(sr.UID),
+			ID: id, ScheduledRunNamespace: sr.Namespace, ScheduledRunName: sr.Name, ScheduledRunUID: string(sr.UID), UserID: SystemUserID,
 			StartTime: start.Add(time.Duration(index) * time.Minute), Status: v1alpha3.ScheduledRunExecutionStatus_InProgress,
 			StatusMessage: strings.Repeat("界", 4096),
 		}

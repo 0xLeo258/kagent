@@ -34,7 +34,7 @@ test("schedules: list, history and read-only conversation", async ({
     page.getByText("The mock cluster is healthy.", { exact: false }),
   ).toBeVisible();
   await expect(page.getByTestId("scheduled-conversation-notice")).toContainText(
-    "This schedule does not allow replies or changes to its conversations.",
+    "You have read-only access to this conversation. Only the user bound to its schedule can reply.",
   );
   await expect(
       page.getByTestId("chat-share"),
@@ -68,12 +68,12 @@ test("schedules: pause, resume, edit and manual trigger", async ({ page }) => {
   await expect(
     page.getByRole("textbox", { name: "Name", exact: true }),
   ).toBeDisabled();
+  await expect(
+    page.getByRole("switch", { name: "Allow conversation interaction" }),
+  ).toHaveCount(0);
   await page
     .getByRole("textbox", { name: "Prompt", exact: true })
     .fill("Report on deployment health.");
-  await page
-    .getByRole("switch", { name: "Allow conversation interaction" })
-    .click();
   await page
     .getByRole("button", { name: "Save schedule", exact: true })
     .click();
@@ -81,10 +81,7 @@ test("schedules: pause, resume, edit and manual trigger", async ({ page }) => {
     page.getByText("Report on deployment health.", { exact: true }),
   ).toBeVisible();
   await page.getByRole("link", { name: "Open conversation" }).click();
-  await expect(page.getByTestId("chat-input")).toBeEnabled();
-  await expect(
-    page.getByTestId("chat-share"),
-  ).toHaveCount(0);
+  await expect(page.getByTestId("chat-input")).toBeDisabled();
 });
 
 test("schedules: create a schedule for an agent pair", async ({ page }) => {
@@ -104,11 +101,27 @@ test("schedules: create a schedule for an agent pair", async ({ page }) => {
     .fill("Summarize deployment health every weekday.");
   await expect(
     page.getByRole("switch", { name: "Allow conversation interaction" }),
-  ).not.toBeChecked();
+  ).toHaveCount(0);
   await page
     .getByRole("button", { name: "Create schedule", exact: true })
     .click();
   await expect(page.getByTestId("page-title")).toHaveText("weekday-health");
   await expect(page.getByText("0 9 * * 1-5", { exact: true })).toBeVisible();
-  await expect(page.getByText("Read-only", { exact: true })).toBeVisible();
+  await expect(page.getByText("Bound user only", { exact: true })).toBeVisible();
+  await expect(page.getByText("alice@example.com", { exact: true })).toBeVisible();
+});
+
+test("schedules: only the bound user can reply", async ({ page }) => {
+  await loadPage(page, "/schedules/kagent/owned-report", { title: "owned-report" });
+  await expect(page.getByText("alice@example.com", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Open conversation" }).click();
+  await expect(page.getByTestId("chat-input")).toBeEnabled();
+  await expect(page.getByTestId("scheduled-conversation-notice")).toContainText("This schedule is bound to your account");
+  await expect(page.getByTestId("chat-share")).toHaveCount(0);
+
+  await loadPage(page, "/schedules/kagent/shared-report", { title: "shared-report" });
+  await expect(page.getByText("bob@example.com", { exact: true })).toBeVisible();
+  await page.getByRole("link", { name: "Open conversation" }).click();
+  await expect(page.getByTestId("chat-input")).toBeDisabled();
+  await expect(page.getByTestId("scheduled-conversation-notice")).toContainText("You have read-only access");
 });

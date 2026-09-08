@@ -54,12 +54,6 @@ spec:
           spec:
             description: ScheduledRunSpec defines the desired state of ScheduledRun.
             properties:
-              allowSessionInteraction:
-                default: false
-                description: |-
-                  AllowSessionInteraction allows users who can read this ScheduledRun to
-                  continue conversations created by it. Defaults to false.
-                type: boolean
               executionTimeout:
                 default: 15m
                 description: |-

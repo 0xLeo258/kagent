@@ -23,6 +23,9 @@ message ScheduledRun {
   ResourceReference ref = 1;
   // The complete kagent.dev/v1alpha3 ScheduledRun Kubernetes resource.
   StructuredObject resource = 2;
+  // The user bound to this schedule by the server. Empty means unbound.
+  // Only this user may interact with its conversations; this is not a writable field.
+  string bound_user_id = 3;
 }
 
 message ScheduledRunExecution {
